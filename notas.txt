@@ -1,0 +1,7 @@
+Problemas potenciales de este código:
+
+allow_origins=["*"]: Inseguro en producción.
+No guarda historial: Cada mensaje es independiente. GPT no recuerda lo anterior.
+user_id no se usa para nada: Lo devuelve pero no filtra ni guarda por usuario.
+max_tokens=200: Si la respuesta se corta, no lo sabés.
+No hay rate limiting: Te pueden fundir la API key con spam.

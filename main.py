@@ -21,6 +21,17 @@ class ChatInput(BaseModel):
     mensaje: str
     user_id: str = "test"
 
+@app.get("/")
+def root():
+    return {
+        "mensaje": "Chatbot Empresa API Online",
+        "docs": "/docs",
+        "health": "/health",
+        "chat_endpoint": "/chat"
+    }
+    
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "version": "3.11"}
@@ -42,3 +53,4 @@ async def chat(data: ChatInput):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    

@@ -3,3 +3,5 @@ chatbotenv/
 __pycache__/
 *.pyc
 .vscode/
+notas.txt
+/old
