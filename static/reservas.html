@@ -4,11 +4,13 @@
     <title>Reservas - El Descansito</title>
     <meta charset="UTF-8">
     <style>
-        body{font-family:Arial;padding:20px;background:#f5f5}
+        body{font-family:Arial;padding:20px;background:#f5f5f5}
         h1{color:#e67e22}
         table{width:100%;background:white;border-collapse:collapse;margin-top:20px}
         th,td{padding:12px;border:1px solid #ddd;text-align:left}
         th{background:#e67e22;color:white}
+        .btn-cancelar{background:#e74c3c;color:white;border:none;padding:5px 10px;border-radius:4px;cursor:pointer}
+        .btn-cancelar:hover{background:#c0392b}
     </style>
 </head>
 <body>
@@ -17,14 +19,35 @@
     <table id="tabla">
         <thead>
             <tr>
-                <th>ID</th><th>Nombre</th><th>Personas</th><th>Fecha</th>
-                <th>Hora</th><th>Teléfono</th><th>Estado</th><th>Comentarios</th>
+                <th>ID</th>
+                <th>Nombre</th>
+                <th>Personas</th>
+                <th>Fecha</th>
+                <th>Hora</th>
+                <th>Teléfono</th>
+                <th>Estado</th>
+                <th>Comentarios</th>
+                <th>Acciones</th>
             </tr>
         </thead>
         <tbody></tbody>
     </table>
 
 <script>
+function cancelar(id) {
+    if (!confirm(`¿Cancelar reserva #${id}?`)) return;
+    fetch(`/cancelar-reserva/${id}`, {method: 'POST'})
+      .then(r => r.json())
+      .then(d => {
+          if(d.ok) {
+              alert('Reserva cancelada');
+              location.reload();
+          } else {
+              alert('Error: ' + d.error);
+          }
+      });
+}
+
 fetch('/reservas')
   .then(r => {
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -43,13 +66,18 @@ fetch('/reservas')
             <td>${r.telefono || '-'}</td>
             <td>${r.estado}</td>
             <td>${r.comentarios || '-'}</td>
+            <td>
+                ${r.estado === 'confirmada' ? 
+                  `<button class="btn-cancelar" onclick="cancelar(${r.id})">Cancelar</button>` 
+                  : '-'}
+            </td>
         </tr>
     `).join('');
   })
   .catch(err => {
     console.error('Error:', err);
     document.querySelector('#tabla tbody').innerHTML = 
-      `<tr><td colspan="8">Error: ${err.message}</td></tr>`;
+      `<tr><td colspan="9">Error: ${err.message}</td></tr>`;
   });
 </script>
 </body>

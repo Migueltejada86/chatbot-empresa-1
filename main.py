@@ -205,11 +205,10 @@ def crear_reserva(nombre: str, personas: int, fecha: str, hora: str, telefono: s
         if disp.get("error"): 
             return disp
             
-        # FIX: Validar por personas, no por mesas
         if disp["personas_libres"] < personas:
             if disp["personas_libres"] == 0:
                 return {"error": f"No hay mesas libres el {fecha} a las {hora}"}
-            return {"error": f"Solo quedan {disp['personas_libres']} lugares para {fecha} a las {hora}. ¿Querés reservar para menos personas?"}
+            return {"error": f"Solo quedan {disp['personas_libres']} lugares para {fecha} a las {hora}"}
         
         conn = get_db()
         c = conn.cursor()
@@ -222,7 +221,12 @@ def crear_reserva(nombre: str, personas: int, fecha: str, hora: str, telefono: s
         conn.commit()
         conn.close()
         print(f"[DB] Reserva #{reserva_id} guardada OK")
-        return {"status": "confirmada", "id": reserva_id, "detalle": f"Reserva #{reserva_id} para {nombre}, {personas} personas, {fecha} {hora}hs"}
+        
+        detalle = f"Reserva #{reserva_id} para {nombre}, {personas} personas, {fecha} {hora}hs"
+        if telefono:
+            detalle += f". Teléfono de contacto: {telefono}"
+        
+        return {"status": "confirmada", "id": reserva_id, "detalle": detalle}
     except Exception as e:
         print(f"[ERROR crear_reserva] {str(e)}")
         return {"error": f"Error: {str(e)}"}
@@ -435,8 +439,11 @@ def procesar_mensaje(user_id: str, mensaje: str, telefono: str = None) -> str:
                 func_name = tool_call.function.name
                 args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
 
-                if telefono and not args.get("telefono"):
-                    args["telefono"] = telefono.replace("whatsapp:", "")
+                # FIX: Pasar telefono automaticamente a crear_reserva y crear_pedido
+                if telefono and func_name in ["crear_reserva", "crear_pedido"]:
+                    telefono_limpio = telefono.replace("whatsapp:", "").replace("+", "")
+                    if not args.get("telefono"):
+                        args["telefono"] = telefono_limpio
 
                 print(f"[TOOL] Ejecutando {func_name} con args: {args}")
 
@@ -450,8 +457,8 @@ def procesar_mensaje(user_id: str, mensaje: str, telefono: str = None) -> str:
 
                 print(f"[TOOL] Resultado {func_name}: {result}")
                 historial.append({"role": "tool", "tool_call_id": tool_call.id, "content": json.dumps(result, ensure_ascii=False)})
-        else:
-            respuesta_final = "Disculpá, hubo un error."
+            else:
+                respuesta_final = "Disculpá, hubo un error."
 
         historial.append({"role": "assistant", "content": respuesta_final})
         conversaciones[user_id] = historial[-12:]
@@ -512,6 +519,23 @@ def ver_reservas():
     rows = c.fetchall()
     conn.close()
     return {"total": len(rows), "reservas": rows}
+
+@app.post("/cancelar-reserva/{reserva_id}")
+def cancelar_reserva(reserva_id: int):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("UPDATE reservas SET estado='cancelada' WHERE id=%s AND estado='confirmada'", (reserva_id,))
+        if c.rowcount == 0:
+            conn.close()
+            return {"error": "Reserva no encontrada o ya cancelada"}
+        conn.commit()
+        conn.close()
+        return {"ok": True, "mensaje": f"Reserva #{reserva_id} cancelada"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 
 @app.get("/pedidos")
 def ver_pedidos():
@@ -638,6 +662,10 @@ def panel_admin():
     </body></html>
     """
     return HTMLResponse(content=html)
+
+
+
+
 
 @app.get("/health")
 def health():
