@@ -9,8 +9,10 @@
         table{width:100%;background:white;border-collapse:collapse;margin-top:20px}
         th,td{padding:12px;border:1px solid #ddd;text-align:left}
         th{background:#e67e22;color:white}
-        .btn-cancelar{background:#e74c3c;color:white;border:none;padding:5px 10px;border-radius:4px;cursor:pointer}
-        .btn-cancelar:hover{background:#c0392b}
+        .btn{border:none;padding:5px 10px;border-radius:4px;cursor:pointer;margin-right:5px;color:white}
+        .btn-editar{background:#3498db}
+        .btn-cancelar{background:#e74c3c}
+        .btn:hover{opacity:0.8}
     </style>
 </head>
 <body>
@@ -19,15 +21,8 @@
     <table id="tabla">
         <thead>
             <tr>
-                <th>ID</th>
-                <th>Nombre</th>
-                <th>Personas</th>
-                <th>Fecha</th>
-                <th>Hora</th>
-                <th>Teléfono</th>
-                <th>Estado</th>
-                <th>Comentarios</th>
-                <th>Acciones</th>
+                <th>ID</th><th>Nombre</th><th>Personas</th><th>Fecha</th>
+                <th>Hora</th><th>Teléfono</th><th>Estado</th><th>Comentarios</th><th>Acciones</th>
             </tr>
         </thead>
         <tbody></tbody>
@@ -46,6 +41,35 @@ function cancelar(id) {
               alert('Error: ' + d.error);
           }
       });
+}
+
+function editar(id) {
+    fetch(`/reserva/${id}`).then(r=>r.json()).then(res => {
+        if(res.error) return alert(res.error);
+        const nombre = prompt("Nombre:", res.nombre);
+        if(!nombre) return;
+        const personas = prompt("Personas:", res.personas);
+        const fecha = prompt("Fecha DD/MM/YYYY:", res.fecha || '');
+        const hora = prompt("Hora HH:MM:", res.hora || '');
+        
+        fetch(`/editar-reserva/${id}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                nombre, 
+                personas: parseInt(personas), 
+                fecha, 
+                hora
+            })
+        }).then(r=>r.json()).then(d => {
+            if(d.ok) {
+                alert('Reserva actualizada');
+                location.reload();
+            } else {
+                alert('Error: ' + d.error);
+            }
+        });
+    });
 }
 
 fetch('/reservas')
@@ -68,7 +92,8 @@ fetch('/reservas')
             <td>${r.comentarios || '-'}</td>
             <td>
                 ${r.estado === 'confirmada' ? 
-                  `<button class="btn-cancelar" onclick="cancelar(${r.id})">Cancelar</button>` 
+                  `<button class="btn btn-editar" onclick="editar(${r.id})">Editar</button>
+                   <button class="btn btn-cancelar" onclick="cancelar(${r.id})">Cancelar</button>` 
                   : '-'}
             </td>
         </tr>

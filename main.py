@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 from collections import defaultdict
+from apscheduler.schedulers.background import BackgroundScheduler
+
 
 load_dotenv()
 app = FastAPI(title="El Descansito - Bot Restaurante")
@@ -469,6 +471,33 @@ def procesar_mensaje(user_id: str, mensaje: str, telefono: str = None) -> str:
         conversaciones[user_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
         return "Hubo un error. Probá de nuevo."
 
+from apscheduler.schedulers.background import BackgroundScheduler
+
+def enviar_recordatorios():
+    conn = get_db()
+    c = conn.cursor()
+    # Reservas en 2hs que no se confirmaron
+    c.execute("""
+        SELECT id, nombre, telefono, fecha, hora 
+        FROM reservas 
+        WHERE estado='confirmada' 
+        AND fecha = CURRENT_DATE
+        AND hora BETWEEN NOW() + INTERVAL '1 hour 55 minutes' AND NOW() + INTERVAL '2 hours 5 minutes'
+        AND recordatorio_enviado = FALSE
+    """)
+    for r in c.fetchall():
+        msg = f"Hola {r['nombre']}, te recordamos tu reserva hoy a las {r['hora']} en El Descansito. ¿Confirmás? Respondé SI o CANCELAR"
+        enviar_whatsapp(r['telefono'], msg)
+        c.execute("UPDATE reservas SET recordatorio_enviado=TRUE WHERE id=%s", (r['id'],))
+    conn.commit()
+    conn.close()
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(enviar_recordatorios, 'interval', minutes=5)
+scheduler.start()
+
+
+
 # === ENDPOINTS ===
 @app.post("/chat")
 async def chat(data: ChatInput):
@@ -554,6 +583,43 @@ def cambiar_estado_pedido(pedido_id: int, estado: str = Form(...)):
 def chats_page():
     return FileResponse("static/chats.html")
 
+@app.get("/reserva/{reserva_id}")
+def get_reserva(reserva_id: int):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM reservas WHERE id=%s", (reserva_id,))
+    r = c.fetchone()
+    conn.close()
+    if not r: return {"error": "No encontrada"}
+    return dict(r)
+
+@app.put("/editar-reserva/{reserva_id}")
+def editar_reserva(reserva_id: int, data: dict):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        # Validar capacidad si cambia fecha/hora/personas
+        if any(k in data for k in ['fecha', 'hora', 'personas']):
+            c.execute("SELECT personas FROM reservas WHERE id=%s", (reserva_id,))
+            personas_viejas = c.fetchone()['personas']
+            fecha = data.get('fecha')
+            hora = data.get('hora')
+            personas = data.get('personas', personas_viejas)
+            
+            disp = ver_mesas_disponibles(fecha, hora)
+            # Sumar las personas que ya tenía esta reserva
+            if disp["personas_libres"] + personas_viejas < personas:
+                return {"error": f"Solo quedan {disp['personas_libres'] + personas_viejas} lugares"}
+        
+        set_clause = ", ".join([f"{k}=%s" for k in data.keys()])
+        values = list(data.values()) + [reserva_id]
+        c.execute(f"UPDATE reservas SET {set_clause} WHERE id=%s", values)
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/reservas-page")
 def reservas_page():
     return FileResponse("static/reservas.html")
@@ -561,6 +627,19 @@ def reservas_page():
 @app.get("/pedidos-page")
 def pedidos_page():
     return FileResponse("static/pedidos.html")
+
+@app.post("/reserva-walk-in")
+def reserva_walk_in(data: dict):
+    # data = {nombre, personas, mesa}
+    ahora = datetime.now()
+    return crear_reserva(
+        data['nombre'], 
+        data['personas'], 
+        ahora.strftime("%d/%m/%Y"), 
+        ahora.strftime("%H:%M"),
+        comentarios="Walk-in"
+    )
+
 
 @app.get("/panel")
 def panel_admin():
@@ -664,7 +743,63 @@ def panel_admin():
     return HTMLResponse(content=html)
 
 
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from io import BytesIO
+from fastapi.responses import StreamingResponse
 
+@app.get("/reporte-dia")
+def reporte_dia(fecha: str = None):
+    if not fecha:
+        fecha = datetime.now().date()
+    else:
+        fecha = datetime.strptime(fecha, "%d/%m/%Y").date()
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Ventas del día
+    c.execute("SELECT COALESCE(SUM(total),0) as sum, COUNT(*) as count FROM pedidos WHERE DATE(creado)=%s AND tipo='delivery'", (fecha,))
+    del_dia = c.fetchone()
+    c.execute("SELECT COALESCE(SUM(total),0) as sum, COUNT(*) as count FROM pedidos WHERE DATE(creado)=%s AND tipo='takeaway'", (fecha,))
+    ta_dia = c.fetchone()
+    
+    # Reservas
+    c.execute("SELECT COUNT(*) as count, COALESCE(SUM(personas),0) as personas FROM reservas WHERE fecha=%s AND estado='confirmada'", (fecha,))
+    res_dia = c.fetchone()
+    c.execute("SELECT COUNT(*) as count FROM reservas WHERE fecha=%s AND estado='cancelada'", (fecha,))
+    res_cancel = c.fetchone()
+    
+    # Semana
+    c.execute("SELECT COALESCE(SUM(total),0) as sum FROM pedidos WHERE creado >= %s - INTERVAL '7 days'", (fecha,))
+    venta_semana = c.fetchone()['sum']
+    
+    # Mes
+    c.execute("SELECT COALESCE(SUM(total),0) as sum FROM pedidos WHERE EXTRACT(MONTH FROM creado)=%s AND EXTRACT(YEAR FROM creado)=%s", (fecha.month, fecha.year))
+    venta_mes = c.fetchone()['sum']
+    
+    conn.close()
+    
+    buffer = BytesIO()
+    p = canvas.Canvas(buffer, pagesize=A4)
+    p.setFont("Helvetica-Bold", 16)
+    p.drawString(100, 800, f"Reporte El Descansito - {fecha.strftime('%d/%m/%Y')}")
+    
+    p.setFont("Helvetica", 12)
+    y = 760
+    p.drawString(100, y, f"Delivery: {del_dia['count']} pedidos - ${del_dia['sum']}"); y -= 20
+    p.drawString(100, y, f"Take Away: {ta_dia['count']} pedidos - ${ta_dia['sum']}"); y -= 20
+    p.drawString(100, y, f"Reservas confirmadas: {res_dia['count']} - {res_dia['personas']} personas"); y -= 20
+    p.drawString(100, y, f"Reservas canceladas: {res_cancel['count']}"); y -= 30
+    p.drawString(100, y, f"Venta semana: ${venta_semana}"); y -= 20
+    p.drawString(100, y, f"Venta mes: ${venta_mes}"); y -= 20
+    
+    p.showPage()
+    p.save()
+    buffer.seek(0)
+    
+    return StreamingResponse(buffer, media_type="application/pdf", 
+                           headers={"Content-Disposition": f"attachment; filename=reporte_{fecha}.pdf"})
 
 
 @app.get("/health")
