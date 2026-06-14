@@ -261,7 +261,7 @@ def crear_pedido(tipo: str, nombre: str, telefono: str, items: list, direccion: 
         # FIX: 8 columnas, 8 placeholders
         c.execute(
             """INSERT INTO pedidos (tipo, nombre, telefono, direccion, items, total, comentarios, pago_tipo)
-               VALUES (%s, %s) RETURNING id""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (tipo, nombre, telefono, direccion, json.dumps(items), total, comentarios, pago_tipo)
         )
         pedido_id = c.fetchone()['id']
