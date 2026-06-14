@@ -108,11 +108,10 @@ def crear_reserva(nombre: str, personas: int, fecha: str, hora: str, telefono: s
         conn = get_db()
         c = conn.cursor()
         c.execute(
-            "INSERT INTO reservas (nombre, personas, fecha, hora, telefono) VALUES (%s,%s,%s) RETURNING id", 
+            "INSERT INTO reservas (nombre, personas, fecha, hora, telefono) VALUES (%s, %s, %s, %s) RETURNING id", 
             (nombre, personas, datetime.strptime(fecha, "%d/%m/%Y").date(), 
-            datetime.strptime(hora, "%H:%M").time(), telefono)
+             datetime.strptime(hora, "%H:%M").time(), telefono)
         )
-        
         reserva_id = c.fetchone()['id']
         conn.commit()
         conn.close()
@@ -206,6 +205,11 @@ Si el usuario da todos los datos, NO respondas con texto. Ejecutá crear_reserva
 async def chat(data: ChatInput):
     try:
         historial = conversaciones.get(data.user_id, [{"role": "system", "content": SYSTEM_PROMPT}])
+        
+        # Fix: limpiar historial corrupto si el último mensaje es tool sin respuesta
+        if len(historial) > 1 and historial[-1].get("role") == "tool":
+            historial = [{"role": "system", "content": SYSTEM_PROMPT}]
+        
         historial.append({"role": "user", "content": data.mensaje})
         print(f"[CHAT] Usuario {data.user_id}: {data.mensaje}")
         
@@ -254,7 +258,6 @@ async def chat(data: ChatInput):
     except Exception as e:
         print(f"[ERROR CHAT] {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/menu")
 def get_menu():
