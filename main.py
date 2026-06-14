@@ -543,25 +543,98 @@ def panel_admin():
     conn = get_db()
     c = conn.cursor()
     hoy = datetime.now().date()
+    mes_actual = hoy.month
+    anio_actual = hoy.year
+    
+    # Reservas
     c.execute("SELECT COUNT(*) as total FROM reservas WHERE fecha=%s AND estado='confirmada'", (hoy,))
     reservas_hoy = c.fetchone()['total']
-    c.execute("SELECT COUNT(*), COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='delivery' AND DATE(creado)=%s", (hoy,))
-    del_data = c.fetchone()
-    c.execute("SELECT COUNT(*), COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='takeaway' AND DATE(creado)=%s", (hoy,))
-    ta_data = c.fetchone()
+    
+    c.execute("SELECT COUNT(*) as total FROM reservas WHERE EXTRACT(MONTH FROM fecha)=%s AND EXTRACT(YEAR FROM fecha)=%s AND estado='confirmada'", (mes_actual, anio_actual))
+    reservas_mes = c.fetchone()['total']
+    
+    c.execute("SELECT COUNT(*) as total FROM reservas WHERE estado='confirmada'")
+    reservas_total = c.fetchone()['total']
+    
+    # Pedidos Delivery
+    c.execute("SELECT COUNT(*) as count, COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='delivery' AND DATE(creado)=%s", (hoy,))
+    del_hoy = c.fetchone()
+    
+    c.execute("SELECT COUNT(*) as count, COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='delivery' AND EXTRACT(MONTH FROM creado)=%s AND EXTRACT(YEAR FROM creado)=%s", (mes_actual, anio_actual))
+    del_mes = c.fetchone()
+    
+    # Pedidos Takeaway
+    c.execute("SELECT COUNT(*) as count, COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='takeaway' AND DATE(creado)=%s", (hoy,))
+    ta_hoy = c.fetchone()
+    
+    c.execute("SELECT COUNT(*) as count, COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='takeaway' AND EXTRACT(MONTH FROM creado)=%s AND EXTRACT(YEAR FROM creado)=%s", (mes_actual, anio_actual))
+    ta_mes = c.fetchone()
+    
+    # Próximas 5 reservas
+    c.execute("""
+        SELECT nombre, personas, to_char(fecha, 'DD/MM') as fecha, to_char(hora, 'HH24:MI') as hora 
+        FROM reservas 
+        WHERE fecha >= %s AND estado='confirmada'
+        ORDER BY fecha, hora LIMIT 5
+    """, (hoy,))
+    proximas = c.fetchall()
     conn.close()
+    
+    proximas_html = "".join([f"<tr><td>{r['fecha']}</td><td>{r['hora']}</td><td>{r['nombre']}</td><td>{r['personas']}p</td></tr>" for r in proximas])
+    
     html = f"""
-    <html><head><title>Panel El Descansito</title><meta charset="UTF-8"><style>
-    body{{font-family:Arial;background:#f5f5f5;padding:20px}}
-.card{{background:white;padding:20px;margin:10px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0.1);display:inline-block;min-width:200px}}
-    h1{{color:#e67e22}}.stat{{font-size:32px;font-weight:bold;color:#27ae60}}
-    a{{color:#3498db;text-decoration:none;margin:0 10px}}
+    <html><head><title>Panel El Descansito</title><meta charset="UTF-8">
+    <style>
+    body{{font-family:Arial;background:#f5f5f5;padding:20px;margin:0}}
+    .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:15px;margin-bottom:20px}}
+    .card{{background:white;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1)}}
+    h1{{color:#e67e22;margin-bottom:20px}}.stat{{font-size:32px;font-weight:bold;color:#27ae60;margin:10px 0}}
+    .substat{{font-size:14px;color:#7f8c8d}}.label{{font-size:12px;color:#95a5a6;text-transform:uppercase}}
+    table{{width:100%;border-collapse:collapse}}th,td{{padding:8px;text-align:left;border-bottom:1px solid #ecf0f1}}
+    th{{background:#e67e22;color:white}}a{{color:#3498db;text-decoration:none;margin-right:15px}}
+    .nav{{background:white;padding:15px;border-radius:8px;margin-bottom:20px}}
     </style></head><body>
     <h1>🍽 El Descansito - Panel</h1>
-    <div class="card"><h3>Reservas Hoy</h3><div class="stat">{reservas_hoy}</div></div>
-    <div class="card"><h3>Delivery Hoy</h3><div class="stat">{del_data['count'] or 0}</div><p>Ventas: ${del_data['sum'] or 0}</p></div>
-    <div class="card"><h3>Take Away Hoy</h3><div class="stat">{ta_data['count'] or 0}</div><p>Ventas: ${ta_data['sum'] or 0}</p></div>
-    <div class="card"><a href="/reservas">Ver Reservas</a> | <a href="/pedidos">Ver Pedidos</a> | <a href="/chats">Ver Chats</a> | <a href="/static/pedidos.html">Gestionar Pedidos</a></div>
+    
+    <div class="nav">
+        <a href="/reservas-page">Ver Reservas</a>
+        <a href="/pedidos-page">Ver Pedidos</a>
+        <a href="/chats-page">Ver Chats</a>
+    </div>
+    
+    <div class="grid">
+        <div class="card">
+            <div class="label">Reservas</div>
+            <div class="stat">{reservas_hoy}</div>
+            <div class="substat">Hoy</div>
+            <div class="substat">Este mes: {reservas_mes}</div>
+            <div class="substat">Total: {reservas_total}</div>
+        </div>
+        
+        <div class="card">
+            <div class="label">Delivery</div>
+            <div class="stat">{del_hoy['count'] or 0}</div>
+            <div class="substat">Hoy: ${del_hoy['sum'] or 0}</div>
+            <div class="substat">Mes: {del_mes['count'] or 0} pedidos</div>
+            <div class="substat">Mes: ${del_mes['sum'] or 0}</div>
+        </div>
+        
+        <div class="card">
+            <div class="label">Take Away</div>
+            <div class="stat">{ta_hoy['count'] or 0}</div>
+            <div class="substat">Hoy: ${ta_hoy['sum'] or 0}</div>
+            <div class="substat">Mes: {ta_mes['count'] or 0} pedidos</div>
+            <div class="substat">Mes: ${ta_mes['sum'] or 0}</div>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>Próximas Reservas</h3>
+        <table>
+            <thead><tr><th>Fecha</th><th>Hora</th><th>Nombre</th><th>Personas</th></tr></thead>
+            <tbody>{proximas_html or '<tr><td colspan="4">Sin reservas próximas</td></tr>'}</tbody>
+        </table>
+    </div>
     </body></html>
     """
     return HTMLResponse(content=html)
