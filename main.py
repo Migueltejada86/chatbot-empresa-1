@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -8,6 +8,8 @@ import os, json, psycopg2
 from psycopg2.extras import RealDictCursor
 from openai import OpenAI
 from datetime import datetime, timedelta
+from twilio.rest import Client
+from twilio.twiml.messaging_response import MessagingResponse
 
 load_dotenv()
 app = FastAPI(title="Chatbot Restaurante Demo")
@@ -20,11 +22,18 @@ BASE_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "http://localhost:8080")
 if not BASE_URL.startswith("http"):
     BASE_URL = f"https://{BASE_URL}"
 
+# === TWILIO ===
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
+twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) if TWILIO_ACCOUNT_SID else None
+
 # === CONFIG RESTAURANTE ===
 TOTAL_MESAS = 10
 DURACION_MESA_HORAS = 2.5
 
 print(f"DATABASE_URL detectada: {DATABASE_URL[:30] if DATABASE_URL else 'NO ENCONTRADA'}...")
+print(f"Twilio configurado: {bool(twilio_client)}")
 
 # === POSTGRESQL ===
 def get_db():
@@ -182,38 +191,39 @@ class ChatInput(BaseModel):
 
 conversaciones = {}
 
-SYSTEM_PROMPT = f"""Sos recepcionista de 'Restaurante Demo' en Alta Gracia.
+SYSTEM_PROMPT = f"""Sos recepcionista de 'Restaurante Demo' en Alta Gracia por WhatsApp.
 HOY ES {datetime.now().strftime('%d/%m/%Y')}. Año 2026.
 
 REGLAS CRÍTICAS:
 1. NUNCA inventes una reserva. SIEMPRE usá la función crear_reserva para guardar.
 2. Tenemos {TOTAL_MESAS} mesas. Cada reserva dura {DURACION_MESA_HORAS}hs.
 3. Horario: 12:00-15:00 y 20:00-00:00. Fuera de eso rechazá.
-4. Para reservar OBLIGATORIO: nombre, personas, fecha DD/MM/YYYY, hora HH:MM. Pedí teléfono si no lo dan.
+4. Para reservar OBLIGATORIO: nombre, personas, fecha DD/MM/YYYY, hora HH:MM. Si te mandan por WhatsApp, usá el número como teléfono.
 5. ANTES de crear_reserva SIEMPRE llamá ver_mesas_disponibles.
 6. Si no hay lugar: "No hay disponibilidad. ¿Probamos 30 min antes o después?"
 7. Si falta algún dato, preguntá. NO asumas nada.
 8. Si piden menú usá enviar_menu.
 9. Para cancelar pedí nombre y fecha, usá cancelar_reserva.
-10. Respondé en 2 líneas máximo.
+10. Respondé corto, 2 líneas máximo. Es WhatsApp.
 
 Si el usuario da todos los datos, NO respondas con texto. Ejecutá crear_reserva directamente.
 """
 
-# === ENDPOINTS ===
-@app.post("/chat")
-async def chat(data: ChatInput):
+def procesar_mensaje(user_id: str, mensaje: str, telefono: str = None) -> str:
+    """Procesa un mensaje y devuelve la respuesta. Reutilizable para web y WhatsApp."""
     try:
-        historial = conversaciones.get(data.user_id, [{"role": "system", "content": SYSTEM_PROMPT}])
+        historial = conversaciones.get(user_id, [{"role": "system", "content": SYSTEM_PROMPT}])
         
-        # Fix: limpiar historial corrupto si el último mensaje es tool sin respuesta
         if len(historial) > 1 and historial[-1].get("role") == "tool":
             historial = [{"role": "system", "content": SYSTEM_PROMPT}]
         
-        historial.append({"role": "user", "content": data.mensaje})
-        print(f"[CHAT] Usuario {data.user_id}: {data.mensaje}")
+        # Si viene de WhatsApp, agregamos el teléfono al contexto
+        if telefono:
+            mensaje = f"{mensaje}\n[Contexto: número del cliente {telefono}]"
         
-        # Loop hasta que OpenAI deje de pedir tools
+        historial.append({"role": "user", "content": mensaje})
+        print(f"[CHAT] Usuario {user_id}: {mensaje}")
+        
         max_iteraciones = 5
         for i in range(max_iteraciones):
             response = client.chat.completions.create(
@@ -234,10 +244,14 @@ async def chat(data: ChatInput):
                 print(f"[OPENAI] Respuesta final sin tools: {respuesta_final}")
                 break
             
-            # Ejecutar todas las tools que pida
             for tool_call in msg.tool_calls:
                 func_name = tool_call.function.name
                 args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+                
+                # Si viene de WhatsApp y no dieron teléfono, lo agregamos
+                if func_name == "crear_reserva" and telefono and not args.get("telefono"):
+                    args["telefono"] = telefono.replace("whatsapp:", "")
+                
                 print(f"[TOOL] Ejecutando {func_name} con args: {args}")
                 
                 if func_name == "enviar_menu": result = enviar_menu()
@@ -252,12 +266,42 @@ async def chat(data: ChatInput):
             respuesta_final = "Disculpá, hubo un error procesando tu pedido."
         
         historial.append({"role": "assistant", "content": respuesta_final})
-        conversaciones[data.user_id] = historial[-12:]
-        return {"respuesta": respuesta_final}
+        conversaciones[user_id] = historial[-12:]
+        return respuesta_final
     
     except Exception as e:
         print(f"[ERROR CHAT] {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return "Hubo un error. Probá de nuevo."
+
+# === ENDPOINTS ===
+@app.post("/chat")
+async def chat(data: ChatInput):
+    respuesta = procesar_mensaje(data.user_id, data.mensaje)
+    return {"respuesta": respuesta}
+
+@app.post("/webhook")
+async def whatsapp_webhook(
+    From: str = Form(...),
+    Body: str = Form(...),
+    ProfileName: str = Form(None)
+):
+    """Endpoint que recibe mensajes de Twilio WhatsApp"""
+    try:
+        print(f"[WHATSAPP] De: {From} | Msg: {Body}")
+        
+        # Procesar con el mismo motor que el chat web
+        respuesta = procesar_mensaje(user_id=From, mensaje=Body, telefono=From)
+        
+        # Responder a Twilio en formato TwiML
+        resp = MessagingResponse()
+        resp.message(respuesta)
+        return Response(content=str(resp), media_type="application/xml")
+    
+    except Exception as e:
+        print(f"[ERROR WHATSAPP] {str(e)}")
+        resp = MessagingResponse()
+        resp.message("Hubo un error. Intentá de nuevo en un minuto.")
+        return Response(content=str(resp), media_type="application/xml")
 
 @app.get("/menu")
 def get_menu():
@@ -276,8 +320,8 @@ def ver_reservas():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "db": "postgres", "mesas": TOTAL_MESAS, "duracion_mesa": f"{DURACION_MESA_HORAS}hs"}
+    return {"status": "ok", "db": "postgres", "mesas": TOTAL_MESAS, "whatsapp": "enabled" if twilio_client else "disabled"}
 
 @app.get("/")
 def root():
-    return {"servicio": "Restaurante Demo API", "docs": "/docs", "chat": "/static/chat.html"}
+    return {"servicio": "Restaurante Demo API", "docs": "/docs", "chat": "/static/chat.html", "webhook": "/webhook"}
