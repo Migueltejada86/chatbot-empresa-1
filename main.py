@@ -157,8 +157,9 @@ init_db()
 # === FUNCIONES NEGOCIO ===
 def esta_en_horario(hora_str: str) -> bool:
     h = datetime.strptime(hora_str, "%H:%M").time()
-    return (h >= datetime.strptime("12:00", "%H:%M").time() and h <= datetime.strptime("15:00", "%H:%M").time()) or \
-           (h >= datetime.strptime("20:00", "%H:%M").time() or h <= datetime.strptime("00:00", "%H:%M").time())
+    apertura = datetime.strptime("09:00", "%H:%M").time()
+    cierre = datetime.strptime("23:00", "%H:%M").time()
+    return apertura <= h <= cierre
 
 def ver_mesas_disponibles(fecha: str, hora: str):
     try:
@@ -184,14 +185,14 @@ def crear_reserva(nombre: str, personas: int, fecha: str, hora: str, telefono: s
     try:
         print(f"[DB] Intentando crear reserva: {nombre}, {personas}, {fecha}, {hora}, tel:{telefono}")
         if not esta_en_horario(hora):
-            return {"error": "Fuera de horario. Atendemos 12-15hs y 20-00hs"}
+            return {"error": "Fuera de horario. Atendemos de 09:00 a 23:00hs"}
         disp = ver_mesas_disponibles(fecha, hora)
         if disp.get("error"): return disp
         if disp["mesas_libres"] == 0:
             return {"error": f"No hay mesas libres el {fecha} a las {hora}"}
         conn = get_db()
         c = conn.cursor()
-        # FIX: 6 valores, 6 placeholders
+        # FIX: 6 columnas, 6 %s
         c.execute(
             "INSERT INTO reservas (nombre, personas, fecha, hora, telefono, comentarios) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
             (nombre, personas, datetime.strptime(fecha, "%d/%m/%Y").date(),
