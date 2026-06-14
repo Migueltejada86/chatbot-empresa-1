@@ -4,58 +4,49 @@
     <title>Pedidos - El Descansito</title>
     <meta charset="UTF-8">
     <style>
-        body{font-family:Arial;margin:20px;background:#f5f5f5}
-        table{width:100%;border-collapse:collapse;background:white;box-shadow:0 2px 4px rgba(0,0,0,0.1)}
-        th{background:#e67e22;color:white;padding:12px;text-align:left}
-        td{padding:10px;border-bottom:1px solid #ddd}
-       .delivery{background:#3498db;color:white;padding:3px 8px;border-radius:3px}
-       .takeaway{background:#9b59b6;color:white;padding:3px 8px;border-radius:3px}
-       .estado-pendiente{background:#f39c12}
-       .estado-en_camino{background:#2ecc71}
-        button{background:#27ae60;color:white;border:none;padding:5px 10px;cursor:pointer;border-radius:3px}
+        body{font-family:Arial;padding:20px;background:#f5f5f5}
+        h1{color:#e67e22}
+        table{width:100%;background:white;border-collapse:collapse;margin-top:20px}
+        th,td{padding:12px;border:1px solid #ddd;text-align:left}
+        th{background:#e67e22;color:white}
+        .estado{padding:4px 8px;border-radius:4px;font-size:12px}
+        .pendiente{background:#f39c12;color:white}
+        .en_camino{background:#3498db;color:white}
+        .entregado{background:#27ae60;color:white}
     </style>
 </head>
 <body>
-    <h1>🍕 Pedidos - El Descansito</h1>
+    <h1>🍽 Pedidos</h1>
+    <div id="stats"></div>
     <table id="tabla">
-        <thead><tr>
-            <th>ID</th><th>Tipo</th><th>Nombre</th><th>Tel</th><th>Dirección</th>
-            <th>Items</th><th>Total</th><th>Estado</th><th>Pago</th><th>Acción</th>
-        </tr></thead>
-        <tbody id="tbody"></tbody>
-    </table>
-<script>
-async function cargar() {
-    const res = await fetch('/pedidos');
-    const data = await res.json();
-    const tbody = document.getElementById('tbody');
-    tbody.innerHTML = '';
-    data.pedidos.forEach(p => {
-        const items = JSON.parse(p.items).map(i => `${i.cantidad}x ${i.nombre}`).join(', ');
-        tbody.innerHTML += `
+        <thead>
             <tr>
-                <td>${p.id}</td>
-                <td><span class="${p.tipo}">${p.tipo}</span></td>
-                <td>${p.nombre}</td>
-                <td>${p.telefono}</td>
-                <td>${p.direccion || '-'}</td>
-                <td>${items}</td>
-                <td><b>$${p.total}</b></td>
-                <td><span class="estado-${p.estado}">${p.estado}</span></td>
-                <td>${p.pago_tipo}</td>
-                <td>
-                    ${p.estado === 'pendiente'? `<button onclick="enviar(${p.id})">En camino</button>` : ''}
-                </td>
+                <th>ID</th><th>Tipo</th><th>Cliente</th><th>Teléfono</th>
+                <th>Dirección</th><th>Items</th><th>Total</th><th>Estado</th><th>Fecha</th>
             </tr>
-        `;
-    });
-}
-async function enviar(id) {
-    await fetch(`/pedidos/${id}/estado`, {method:'POST',body:new URLSearchParams({estado:'en_camino'})});
-    cargar();
-}
-cargar();
-setInterval(cargar, 5000);
+        </thead>
+        <tbody></tbody>
+    </table>
+
+<script>
+fetch('/pedidos').then(r=>r.json()).then(d=>{
+    document.getElementById('stats').innerHTML = `<h3>Total: ${d.total}</h3>`;
+    const tbody = document.querySelector('#tabla tbody');
+    tbody.innerHTML = d.pedidos.map(p=>{
+        const items = JSON.parse(p.items).map(i=>`${i.cantidad}x ${i.nombre}`).join(', ');
+        return `<tr>
+            <td>#${p.id}</td>
+            <td>${p.tipo}</td>
+            <td>${p.nombre}</td>
+            <td>${p.telefono}</td>
+            <td>${p.direccion || '-'}</td>
+            <td>${items}</td>
+            <td>$${p.total}</td>
+            <td><span class="estado ${p.estado}">${p.estado}</span></td>
+            <td>${p.creado}</td>
+        </tr>`
+    }).join('');
+});
 </script>
 </body>
 </html>

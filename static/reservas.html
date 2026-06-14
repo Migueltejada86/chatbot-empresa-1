@@ -1,39 +1,46 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Ver Reservas</title>
+    <title>Reservas - El Descansito</title>
+    <meta charset="UTF-8">
     <style>
-        body { font-family: system-ui; padding: 20px; max-width: 1000px; margin: auto; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
-        th { background: #ff6b35; color: white; }
+        body{font-family:Arial;padding:20px;background:#f5f5}
+        h1{color:#e67e22}
+        table{width:100%;background:white;border-collapse:collapse;margin-top:20px}
+        th,td{padding:12px;border:1px solid #ddd;text-align:left}
+        th{background:#e67e22;color:white}
     </style>
 </head>
 <body>
-    <h1>📅 Reservas del Restaurante</h1>
+    <h1>📅 Reservas</h1>
+    <div id="stats"></div>
     <table id="tabla">
         <thead>
-            <tr><th>ID</th><th>Nombre</th><th>Personas</th><th>Fecha</th><th>Hora</th><th>Creado</th></tr>
+            <tr>
+                <th>ID</th><th>Nombre</th><th>Personas</th><th>Fecha</th>
+                <th>Hora</th><th>Teléfono</th><th>Estado</th><th>Comentarios</th>
+            </tr>
         </thead>
         <tbody></tbody>
     </table>
 
-    <script>
-        fetch('/reservas')
-           .then(r => r.json())
-           .then(data => {
-                const tbody = document.querySelector('tbody');
-                data.reservas.forEach(r => {
-                    tbody.innerHTML += `<tr>
-                        <td>${r.id}</td>
-                        <td>${r.nombre}</td>
-                        <td>${r.personas}</td>
-                        <td>${r.fecha}</td>
-                        <td>${r.hora}</td>
-                        <td>${new Date(r.creado).toLocaleString()}</td>
-                    </tr>`;
-                });
-            });
-    </script>
+<script>
+fetch('/reservas').then(r=>r.json()).then(d=>{
+    document.getElementById('stats').innerHTML = `<h3>Total: ${d.total}</h3>`;
+    const tbody = document.querySelector('#tabla tbody');
+    tbody.innerHTML = d.reservas.map(r=>`
+        <tr>
+            <td>#${r.id}</td>
+            <td>${r.nombre}</td>
+            <td>${r.personas}</td>
+            <td>${r.fecha}</td>
+            <td>${r.hora}</td>
+            <td>${r.telefono || '-'}</td>
+            <td>${r.estado}</td>
+            <td>${r.comentarios || '-'}</td>
+        </tr>
+    `).join('');
+});
+</script>
 </body>
 </html>
