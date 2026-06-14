@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -8,9 +8,6 @@ import os, json, psycopg2
 from psycopg2.extras import RealDictCursor
 from openai import OpenAI
 from datetime import datetime, timedelta
-from dateutil import parser
-from twilio.rest import Client
-from twilio.twiml.messaging_response import MessagingResponse
 
 load_dotenv()
 app = FastAPI(title="Chatbot Restaurante Demo")
@@ -23,13 +20,12 @@ BASE_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "http://localhost:8080")
 if not BASE_URL.startswith("http"):
     BASE_URL = f"https://{BASE_URL}"
 
-# Twilio para WhatsApp y SMS
-TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP = os.getenv("TWILIO_WHATSAPP_NUMBER") # whatsapp:+14155238886
-twilio_client = Client(TWILIO_SID, TWILIO_TOKEN) if TWILIO_SID else None
+# === CONFIGURACIÓN RESTAURANTE ===
+TOTAL_MESAS = 10
+DURACION_MESA_HORAS = 2.5
+HORARIOS = [("12:00", "15:00"), ("20:00", "00:00")] # almuerzo y cena
 
-# === DB POSTGRESQL ===
+# === POSTGRESQL ===
 def get_db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
@@ -48,135 +44,114 @@ def init_db():
     )''')
     conn.commit()
     conn.close()
+    print("PostgreSQL: tabla reservas lista")
 
 init_db()
 
-# === LÓGICA DE MESAS ===
-TOTAL_MESAS = 10
-DURACION_MESA_HORAS = 2.5 # 2 horas y media promedio por mesa
+# === LÓGICA DE MESAS CON SOLAPAMIENTO ===
+def esta_en_horario(hora_str: str) -> bool:
+    h = datetime.strptime(hora_str, "%H:%M").time()
+    return (h >= datetime.strptime("12:00", "%H:%M").time() and h <= datetime.strptime("15:00", "%H:%M").time()) or \
+           (h >= datetime.strptime("20:00", "%H:%M").time() or h <= datetime.strptime("00:00", "%H:%M").time())
 
 def ver_mesas_disponibles(fecha: str, hora: str):
-    """Chequea mesas libres considerando que cada reserva bloquea 2.5hs"""
     try:
         fecha_dt = datetime.strptime(fecha, "%d/%m/%Y").date()
         hora_dt = datetime.strptime(hora, "%H:%M").time()
-        inicio_nueva = datetime.combine(fecha_dt, hora_dt)
-        fin_nueva = inicio_nueva + timedelta(hours=DURACION_MESA_HORAS)
+        inicio = datetime.combine(fecha_dt, hora_dt)
+        fin = inicio + timedelta(hours=DURACION_MESA_HORAS)
         
         conn = get_db()
         c = conn.cursor()
         
-        # Buscamos reservas que se solapen en el rango de 2.5hs
+        # Busca reservas que se pisen: si la nueva empieza antes que termine otra, o si otra empieza antes que termine la nueva
         c.execute("""
             SELECT COUNT(*) as ocupadas FROM reservas 
-            WHERE fecha = %s 
-            AND estado = 'confirmada'
+            WHERE fecha = %s AND estado = 'confirmada'
             AND (
-                (hora >= %s AND hora < %s) OR 
-                (hora + interval '%s hours' > %s AND hora <= %s)
+                (hora + interval '%s hours') > %s AND hora < %s
             )
-        """, (fecha_dt, hora_dt, fin_nueva.time(), DURACION_MESA_HORAS, hora_dt, hora_dt))
+        """, (fecha_dt, DURACION_MESA_HORAS, hora_dt, fin.time()))
         
         ocupadas = c.fetchone()['ocupadas']
         conn.close()
         
-        disponibles = TOTAL_MESAS - ocupadas
         return {
             "fecha": fecha, 
             "hora": hora, 
-            "mesas_libres": max(0, disponibles),
-            "mesas_ocupadas": ocupadas,
-            "total_mesas": TOTAL_MESAS
+            "mesas_libres": max(0, TOTAL_MESAS - ocupadas),
+            "mesas_ocupadas": ocupadas
         }
     except Exception as e:
         return {"error": str(e)}
 
 def crear_reserva(nombre: str, personas: int, fecha: str, hora: str, telefono: str = None):
     try:
-        fecha_dt = datetime.strptime(fecha, "%d/%m/%Y").date()
-        hora_dt = datetime.strptime(hora, "%H:%M").time()
+        if not esta_en_horario(hora):
+            return {"error": "Fuera de horario. Atendemos 12-15hs y 20-00hs"}
         
-        # Validar horario restaurante: 12-15 y 20-00
-        if not ((hora_dt >= datetime.strptime("12:00", "%H:%M").time() and hora_dt <= datetime.strptime("15:00", "%H:%M").time()) or
-                (hora_dt >= datetime.strptime("20:00", "%H:%M").time() or hora_dt <= datetime.strptime("00:00", "%H:%M").time())):
-            return {"error": "Horario fuera de servicio. Atendemos 12-15hs y 20-00hs"}
-        
-        disponibilidad = ver_mesas_disponibles(fecha, hora)
-        if disponibilidad["mesas_libres"] == 0:
-            return {"error": f"No hay mesas libres el {fecha} a las {hora}. Probá otro horario."}
+        disp = ver_mesas_disponibles(fecha, hora)
+        if disp.get("error"): return disp
+        if disp["mesas_libres"] == 0:
+            return {"error": f"No hay mesas libres el {fecha} a las {hora}. Duración promedio: {DURACION_MESA_HORAS}hs por mesa."}
         
         conn = get_db()
         c = conn.cursor()
         c.execute(
             "INSERT INTO reservas (nombre, personas, fecha, hora, telefono) VALUES (%s,%s,%s) RETURNING id", 
-            (nombre, personas, fecha_dt, hora_dt, telefono)
+            (nombre, personas, datetime.strptime(fecha, "%d/%m/%Y").date(), 
+             datetime.strptime(hora, "%H:%M").time(), telefono)
         )
         reserva_id = c.fetchone()['id']
         conn.commit()
         conn.close()
-        
-        return {
-            "status": "confirmada",
-            "id": reserva_id,
-            "detalle": f"Reserva #{reserva_id} para {nombre}, {personas} personas, el {fecha} a las {hora}hs"
-        }
+        return {"status": "confirmada", "id": reserva_id, "detalle": f"Reserva #{reserva_id} para {nombre}, {personas} personas, {fecha} {hora}hs"}
     except Exception as e:
         return {"error": f"Error: {str(e)}"}
 
 def cancelar_reserva(nombre: str, fecha: str):
-    """Cancela reserva por nombre y fecha"""
     try:
-        fecha_dt = datetime.strptime(fecha, "%d/%m/%Y").date()
         conn = get_db()
         c = conn.cursor()
         c.execute(
             "UPDATE reservas SET estado='cancelada' WHERE nombre ILIKE %s AND fecha=%s AND estado='confirmada' RETURNING id", 
-            (f"%{nombre}%", fecha_dt)
+            (f"%{nombre}%", datetime.strptime(fecha, "%d/%m/%Y").date())
         )
-        cancelada = c.fetchone()
+        row = c.fetchone()
         conn.commit()
         conn.close()
-        
-        if cancelada:
-            return {"status": "cancelada", "detalle": f"Reserva #{cancelada['id']} de {nombre} cancelada"}
+        if row:
+            return {"status": "cancelada", "detalle": f"Reserva #{row['id']} de {nombre} cancelada"}
         return {"error": "No encontré reserva activa con ese nombre y fecha"}
     except Exception as e:
         return {"error": str(e)}
 
 def enviar_menu():
-    return {"url": f"{BASE_URL}/menu", "mensaje": "Acá tenés nuestro menú completo"}
+    return {"url": f"{BASE_URL}/menu", "mensaje": "Acá tenés nuestro menú"}
 
-# === TOOLS PARA OPENAI ===
+# === OPENAI TOOLS ===
 tools = [
-    {"type": "function", "function": {
-        "name": "enviar_menu",
-        "description": "Envía el link del menú PDF"
-    }},
+    {"type": "function", "function": {"name": "enviar_menu", "description": "Envía el link del menú PDF"}},
     {"type": "function", "function": {
         "name": "ver_mesas_disponibles",
-        "description": "Consulta mesas libres en fecha y hora. Usar antes de crear_reserva.",
+        "description": "Chequea mesas libres antes de reservar",
         "parameters": {"type": "object", "properties": {
-            "fecha": {"type": "string", "description": "DD/MM/YYYY"},
-            "hora": {"type": "string", "description": "HH:MM"}
+            "fecha": {"type": "string"}, "hora": {"type": "string"}
         }, "required": ["fecha", "hora"]}
     }},
     {"type": "function", "function": {
         "name": "crear_reserva",
-        "description": "Crea reserva. Pedir nombre, personas, fecha DD/MM/YYYY, hora HH:MM, telefono opcional.",
+        "description": "Crea reserva. Pedir nombre, personas, fecha DD/MM/YYYY, hora HH:MM, telefono opcional",
         "parameters": {"type": "object", "properties": {
-            "nombre": {"type": "string"},
-            "personas": {"type": "integer"},
-            "fecha": {"type": "string"},
-            "hora": {"type": "string"},
-            "telefono": {"type": "string", "description": "Para recordatorio por WhatsApp"}
+            "nombre": {"type": "string"}, "personas": {"type": "integer"},
+            "fecha": {"type": "string"}, "hora": {"type": "string"}, "telefono": {"type": "string"}
         }, "required": ["nombre", "personas", "fecha", "hora"]}
     }},
     {"type": "function", "function": {
         "name": "cancelar_reserva",
-        "description": "Cancela reserva existente. Pedir nombre y fecha.",
+        "description": "Cancela reserva. Pedir nombre y fecha DD/MM/YYYY",
         "parameters": {"type": "object", "properties": {
-            "nombre": {"type": "string"},
-            "fecha": {"type": "string", "description": "DD/MM/YYYY"}
+            "nombre": {"type": "string"}, "fecha": {"type": "string"}
         }, "required": ["nombre", "fecha"]}
     }}
 ]
@@ -186,78 +161,27 @@ class ChatInput(BaseModel):
     user_id: str = "anonimo"
 
 conversaciones = {}
-
 SYSTEM_PROMPT = f"""Sos recepcionista de 'Restaurante Demo' en Alta Gracia.
 HOY ES {datetime.now().strftime('%d/%m/%Y')}. Año 2026.
 
 REGLAS:
-1. Tenemos solo {TOTAL_MESAS} mesas. Cada reserva ocupa {DURACION_MESA_HORAS}hs.
-2. Horario: 12:00-15:00 y 20:00-00:00. No tomes reservas fuera.
-3. Para reservar pedí: nombre, personas, fecha DD/MM/YYYY, hora HH:MM, teléfono para WhatsApp.
-4. Antes de crear_reserva, SIEMPRE usá ver_mesas_disponibles.
-5. Si piden menú, usá enviar_menu.
-6. Si piden cancelar, usá cancelar_reserva con nombre y fecha.
-7. Si no hay mesas: "No tenemos disponibilidad en ese horario. ¿Probamos 30 min antes o después?"
-8. Sé breve, 2 líneas máximo. Año actual siempre 2026.
-
-Menu: {BASE_URL}/menu
+1. Tenemos {TOTAL_MESAS} mesas. Cada reserva dura {DURACION_MESA_HORAS}hs promedio.
+2. Horario: 12:00-15:00 y 20:00-00:00. Fuera de eso no hay servicio.
+3. Para reservar: nombre, personas, fecha DD/MM/YYYY, hora HH:MM, teléfono para confirmación.
+4. ANTES de crear_reserva SIEMPRE usá ver_mesas_disponibles.
+5. Si no hay lugar: "No hay disponibilidad. ¿Probamos 30 min antes o después?"
+6. Para cancelar pedí nombre y fecha.
+7. Si piden menú usá enviar_menu.
+8. Sé breve, 2 líneas. Año actual 2026.
 """
 
 # === ENDPOINTS ===
 @app.post("/chat")
 async def chat(data: ChatInput):
-    try:
-        historial = conversaciones.get(data.user_id, [{"role": "system", "content": SYSTEM_PROMPT}])
-        historial.append({"role": "user", "content": data.mensaje})
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=historial,
-            tools=tools,
-            tool_choice="auto",
-            max_tokens=200
-        )
-        
-        msg = response.choices[0].message
-        historial.append(msg)
-        
-        if msg.tool_calls:
-            for tool_call in msg.tool_calls:
-                func_name = tool_call.function.name
-                args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
-                
-                if func_name == "enviar_menu": result = enviar_menu()
-                elif func_name == "ver_mesas_disponibles": result = ver_mesas_disponibles(**args)
-                elif func_name == "crear_reserva": result = crear_reserva(**args)
-                elif func_name == "cancelar_reserva": result = cancelar_reserva(**args)
-                
-                historial.append({"role": "tool", "tool_call_id": tool_call.id, "content": json.dumps(result)})
-            
-            response_2 = client.chat.completions.create(model="gpt-4o-mini", messages=historial, max_tokens=200)
-            respuesta_final = response_2.choices[0].message.content
-        else:
-            respuesta_final = msg.content
-        
-        historial.append({"role": "assistant", "content": respuesta_final})
-        conversaciones[data.user_id] = historial[-12:]
-        return {"respuesta": respuesta_final, "user_id": data.user_id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# === WHATSAPP TWILIO ===
-@app.post("/whatsapp")
-async def whatsapp_webhook(request: Request):
-    """Endpoint que Twilio llama cuando llega un WhatsApp"""
-    form = await request.form()
-    incoming_msg = form.get('Body', '').strip()
-    sender = form.get('From', '') # whatsapp:+549...
+    historial = conversaciones.get(data.user_id, [{"role": "system", "content": SYSTEM_PROMPT}])
+    historial.append({"role": "user", "content": data.mensaje})
     
-    # Reutilizamos la lógica del /chat
-    user_id = sender.replace("whatsapp:", "")
-    historial = conversaciones.get(user_id, [{"role": "system", "content": SYSTEM_PROMPT}])
-    historial.append({"role": "user", "content": incoming_msg})
-    
-    response = client.chat.completions.create(model="gpt-4o-mini", messages=historial, tools=tools, tool_choice="auto")
+    response = client.chat.completions.create(model="gpt-4o-mini", messages=historial, tools=tools, tool_choice="auto", max_tokens=200)
     msg = response.choices[0].message
     historial.append(msg)
     
@@ -269,41 +193,36 @@ async def whatsapp_webhook(request: Request):
             elif func_name == "ver_mesas_disponibles": result = ver_mesas_disponibles(**args)
             elif func_name == "crear_reserva": result = crear_reserva(**args)
             elif func_name == "cancelar_reserva": result = cancelar_reserva(**args)
-            historial.append({"role": "tool", "tool_call_id": tool_call.id, "content": json.dumps(result)})
+            historial.append({"role": "tool", "tool_call_id": tool_call.id, "content": json.dumps(result, ensure_ascii=False)})
         
-        response_2 = client.chat.completions.create(model="gpt-4o-mini", messages=historial)
+        response_2 = client.chat.completions.create(model="gpt-4o-mini", messages=historial, max_tokens=200)
         respuesta_final = response_2.choices[0].message.content
     else:
         respuesta_final = msg.content
     
     historial.append({"role": "assistant", "content": respuesta_final})
-    conversaciones[user_id] = historial[-12:]
-    
-    # Responder a Twilio
-    resp = MessagingResponse()
-    resp.message(respuesta_final)
-    return str(resp)
+    conversaciones[data.user_id] = historial[-12:]
+    return {"respuesta": respuesta_final}
 
 @app.get("/menu")
 def get_menu():
-    file_path = "data/menu.pdf"
-    if not os.path.exists(file_path):
+    if not os.path.exists("data/menu.pdf"):
         raise HTTPException(status_code=404, detail="menu.pdf no encontrado")
-    return FileResponse(path=file_path, media_type='application/pdf', filename="Menu.pdf")
+    return FileResponse("data/menu.pdf", media_type='application/pdf', filename="Menu.pdf")
 
 @app.get("/reservas")
 def ver_reservas():
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT * FROM reservas WHERE estado='confirmada' ORDER BY fecha DESC, hora DESC")
+    c.execute("SELECT id, nombre, personas, to_char(fecha, 'DD/MM/YYYY') as fecha, to_char(hora, 'HH24:MI') as hora, estado, telefono, creado FROM reservas ORDER BY fecha DESC, hora DESC")
     rows = c.fetchall()
     conn.close()
-    return {"total": len(rows), "reservas": [dict(row) for row in rows]}
+    return {"total": len(rows), "reservas": rows}
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "db": "postgres", "mesas": TOTAL_MESAS}
+    return {"status": "ok", "db": "postgres", "mesas": TOTAL_MESAS, "duracion_mesa": f"{DURACION_MESA_HORAS}hs"}
 
 @app.get("/")
 def root():
-    return {"servicio": "API Restaurante Online", "menu": "/menu", "chat": "/static/chat.html"}
+    return {"servicio": "Restaurante Demo API", "docs": "/docs", "chat": "/static/chat.html"}
