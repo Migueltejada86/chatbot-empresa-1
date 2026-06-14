@@ -4,8 +4,8 @@ from fastapi.responses import FileResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
-import os, json, psycopg2, uuid, time, re
-from psycopg2.extras import RealDictCursor
+import os, json, psycopg, uuid, time, re
+from psycopg.rows import dict_row
 from openai import OpenAI
 from datetime import datetime, timedelta
 from twilio.rest import Client
@@ -129,7 +129,7 @@ MENU_DEL_DIA = {
 def get_db():
     if not DATABASE_URL:
         raise Exception("DATABASE_URL no configurada")
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    return psycopg.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 def init_db():
     conn = get_db()
