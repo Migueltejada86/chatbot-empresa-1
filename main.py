@@ -200,15 +200,19 @@ def crear_reserva(nombre: str, personas: int, fecha: str, hora: str, telefono: s
         print(f"[DB] Intentando crear reserva: {nombre}, {personas}, {fecha}, {hora}, tel:{telefono}")
         if not esta_en_horario(hora):
             return {"error": "Fuera de horario. Atendemos de 09:00 a 23:00hs"}
+        
         disp = ver_mesas_disponibles(fecha, hora)
-        if disp.get("error"): return disp
-        if disp.get("error"): return disp
+        if disp.get("error"): 
+            return disp
+            
+        # FIX: Validar por personas, no por mesas
         if disp["personas_libres"] < personas:
-            return {"error": f"Solo quedan {disp['personas_libres']} lugares para {fecha} a las {hora}"}
-
+            if disp["personas_libres"] == 0:
+                return {"error": f"No hay mesas libres el {fecha} a las {hora}"}
+            return {"error": f"Solo quedan {disp['personas_libres']} lugares para {fecha} a las {hora}. ¿Querés reservar para menos personas?"}
+        
         conn = get_db()
         c = conn.cursor()
-        # FIX: 6 columnas, 6 %s
         c.execute(
             "INSERT INTO reservas (nombre, personas, fecha, hora, telefono, comentarios) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
             (nombre, personas, datetime.strptime(fecha, "%d/%m/%Y").date(),
