@@ -33,19 +33,25 @@ fetch('/pedidos').then(r=>r.json()).then(d=>{
     document.getElementById('stats').innerHTML = `<h3>Total: ${d.total}</h3>`;
     const tbody = document.querySelector('#tabla tbody');
     tbody.innerHTML = d.pedidos.map(p=>{
-        const items = JSON.parse(p.items).map(i=>`${i.cantidad}x ${i.nombre}`).join(', ');
+        // FIX: items ya es objeto, no hace falta parsear
+        const items = Array.isArray(p.items) ? p.items : JSON.parse(p.items || '[]');
+        const itemsTexto = items.map(i=>`${i.cantidad}x ${i.nombre}`).join(', ');
+        
         return `<tr>
             <td>#${p.id}</td>
             <td>${p.tipo}</td>
             <td>${p.nombre}</td>
             <td>${p.telefono}</td>
             <td>${p.direccion || '-'}</td>
-            <td>${items}</td>
+            <td>${itemsTexto}</td>
             <td>$${p.total}</td>
             <td><span class="estado ${p.estado}">${p.estado}</span></td>
-            <td>${p.creado}</td>
+            <td>${p.creado || '-'}</td>
         </tr>`
     }).join('');
+}).catch(err=>{
+    console.error('Error cargando pedidos:', err);
+    document.querySelector('#tabla tbody').innerHTML = '<tr><td colspan="9">Error cargando datos</td></tr>';
 });
 </script>
 </body>

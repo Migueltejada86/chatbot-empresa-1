@@ -40,6 +40,9 @@ fetch('/reservas').then(r=>r.json()).then(d=>{
             <td>${r.comentarios || '-'}</td>
         </tr>
     `).join('');
+}).catch(err=>{
+    console.error('Error cargando reservas:', err);
+    document.querySelector('#tabla tbody').innerHTML = '<tr><td colspan="8">Error cargando datos</td></tr>';
 });
 </script>
 </body>
