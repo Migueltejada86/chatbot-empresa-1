@@ -161,25 +161,39 @@ def esta_en_horario(hora_str: str) -> bool:
     cierre = datetime.strptime("23:00", "%H:%M").time()
     return apertura <= h <= cierre
 
-def ver_mesas_disponibles(fecha: str, hora: str):
+def ver_mesas_disponibles(fecha_str: str, hora_str: str):
     try:
-        fecha_dt = datetime.strptime(fecha, "%d/%m/%Y").date()
-        hora_dt = datetime.strptime(hora, "%H:%M").time()
-        inicio = datetime.combine(fecha_dt, hora_dt)
-        fin = inicio + timedelta(hours=DURACION_MESA_HORAS)
+        f = datetime.strptime(fecha_str, "%d/%m/%Y").date()
+        h = datetime.strptime(hora_str, "%H:%M").time()
         conn = get_db()
         c = conn.cursor()
+        
+        # FIX: Sumar personas, no contar reservas
         c.execute("""
-            SELECT COUNT(*) as ocupadas FROM reservas
-            WHERE fecha = %s AND estado = 'confirmada'
-            AND (hora + interval '%s hours') > %s AND hora < %s
-        """, (fecha_dt, DURACION_MESA_HORAS, hora_dt, fin.time()))
-        ocupadas = c.fetchone()['ocupadas']
+            SELECT COALESCE(SUM(personas), 0) as personas_ocupadas 
+            FROM reservas 
+            WHERE fecha = %s AND hora = %s AND estado = 'confirmada'
+        """, (f, h))
+        
+        personas_ocupadas = c.fetchone()['personas_ocupadas']
         conn.close()
-        return {"fecha": fecha, "hora": hora, "mesas_libres": max(0, TOTAL_MESAS - ocupadas), "mesas_ocupadas": ocupadas}
+        
+        MESAS_TOTALES = 10
+        CAPACIDAD_POR_MESA = 4
+        capacidad_total = MESAS_TOTALES * CAPACIDAD_POR_MESA  # 40 personas
+        
+        personas_libres = capacidad_total - personas_ocupadas
+        mesas_libres = personas_libres // CAPACIDAD_POR_MESA
+        
+        return {
+            "fecha": fecha_str,
+            "hora": hora_str,
+            "mesas_libres": max(0, mesas_libres),
+            "personas_libres": max(0, personas_libres),
+            "personas_ocupadas": personas_ocupadas
+        }
     except Exception as e:
-        print(f"[ERROR ver_mesas] {str(e)}")
-        return {"error": str(e)}
+        return {"error": f"Error verificando disponibilidad: {str(e)}"}
 
 def crear_reserva(nombre: str, personas: int, fecha: str, hora: str, telefono: str = None, comentarios: str = None):
     try:
@@ -188,8 +202,10 @@ def crear_reserva(nombre: str, personas: int, fecha: str, hora: str, telefono: s
             return {"error": "Fuera de horario. Atendemos de 09:00 a 23:00hs"}
         disp = ver_mesas_disponibles(fecha, hora)
         if disp.get("error"): return disp
-        if disp["mesas_libres"] == 0:
-            return {"error": f"No hay mesas libres el {fecha} a las {hora}"}
+        if disp.get("error"): return disp
+        if disp["personas_libres"] < personas:
+            return {"error": f"Solo quedan {disp['personas_libres']} lugares para {fecha} a las {hora}"}
+
         conn = get_db()
         c = conn.cursor()
         # FIX: 6 columnas, 6 %s
