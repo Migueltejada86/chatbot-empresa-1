@@ -184,3 +184,12 @@ def ver_reservas():
             "creado": row[5]
         })
     return {"total": len(reservas), "reservas": reservas}
+
+
+
+
+@app.get("/debug")
+def debug():
+    archivos = os.listdir('.')
+    db_existe = os.path.exists('restaurante.db')
+    return {"archivos_en_raiz": archivos, "db_existe": db_existe}
