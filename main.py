@@ -191,8 +191,9 @@ def crear_reserva(nombre: str, personas: int, fecha: str, hora: str, telefono: s
             return {"error": f"No hay mesas libres el {fecha} a las {hora}"}
         conn = get_db()
         c = conn.cursor()
+        # FIX: 6 valores, 6 placeholders
         c.execute(
-            "INSERT INTO reservas (nombre, personas, fecha, hora, telefono, comentarios) VALUES (%s, %s, %s, %s) RETURNING id",
+            "INSERT INTO reservas (nombre, personas, fecha, hora, telefono, comentarios) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
             (nombre, personas, datetime.strptime(fecha, "%d/%m/%Y").date(),
              datetime.strptime(hora, "%H:%M").time(), telefono, comentarios)
         )
@@ -240,7 +241,7 @@ def buscar_plato(nombre_plato: str):
                 return plato
     return None
 
-def crear_pedido(tipo: str, nombre: str, telefono: str, items: list, direccion: str = None, comentarios: str = None, pago_tipo: str = "efectivo"):
+def crear_pedido(tipo: str, nombre: str, telefono: str, items: list, direccion: str = None, comentarios: str = "", pago_tipo: str = "efectivo"):
     print(f"[PEDIDO] Creando: {tipo} para {nombre}, items: {items}, dir: {direccion}")
     try:
         ahora = datetime.now().time()
@@ -257,9 +258,10 @@ def crear_pedido(tipo: str, nombre: str, telefono: str, items: list, direccion: 
 
         conn = get_db()
         c = conn.cursor()
+        # FIX: 8 columnas, 8 placeholders
         c.execute(
             """INSERT INTO pedidos (tipo, nombre, telefono, direccion, items, total, comentarios, pago_tipo)
-               VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+               VALUES (%s, %s) RETURNING id""",
             (tipo, nombre, telefono, direccion, json.dumps(items), total, comentarios, pago_tipo)
         )
         pedido_id = c.fetchone()['id']
@@ -364,7 +366,7 @@ ENTRADAS: Empanadas criollas $3000, Papas bravas $9500, Provoleta asada $11000, 
 PRINCIPALES: Bife cuadril $18000, Bife chorizo $24000, Bondiola $17000, Ternera $17000, Salmón $25000, Matambre $17000, Trucha $23000, Entrecot $19500, Ñoquis papa $13500, Sorrentinos calabaza $13500, Ñoquis espinaca $14500
 PASTA: Canelones $13500, Milanesa napolitana con papas fritas $15000, Milanesa peceto $13500, Lomo Kuate $15000, Pollo limón $12500, Pacu $18000, Parrillada Completa $24000, Parrillada 2p $40000, Menú Infantil $11000
 ENSALADAS: Completa $8500, Caesar $10000, Salmón&Langostino $15000
-POSTRES: Flan $5000, Panqueque $5000, Ensalada fruta $4500, Queso y dulce $4500, Frutillas $6500, Helado $3000, Tiramisú $5500, Café $3000
+POSTRES: Flan $5000, Panque $5000, Ensalada fruta $4500, Queso y dulce $4500, Frutillas $6500, Helado $3000, Tiramisú $5500, Café $3000
 BEBIDAS: Agua $3500, Saborizada $3500, Bebida Grande $9000, Jarra Limonada $9000
 
 MENU DEL DÍA: {MENU_DEL_DIA[datetime.now().weekday()]}
@@ -522,11 +524,11 @@ def panel_admin():
     html = f"""
     <html><head><title>Panel El Descansito</title><meta charset="UTF-8"><style>
     body{{font-family:Arial;background:#f5f5f5;padding:20px}}
-.card{{background:white;padding:20px;margin:10px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0.1);display:inline-block;min-width:200px}}
+.card{{background:white;padding:20px;margin:10px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0.1);display:inline-block;min-width:200px}}
     h1{{color:#e67e22}}.stat{{font-size:32px;font-weight:bold;color:#27ae60}}
     a{{color:#3498db;text-decoration:none;margin:0 10px}}
     </style></head><body>
-    <h1>🍽️ El Descansito - Panel</h1>
+    <h1>🍽 El Descansito - Panel</h1>
     <div class="card"><h3>Reservas Hoy</h3><div class="stat">{reservas_hoy}</div></div>
     <div class="card"><h3>Delivery Hoy</h3><div class="stat">{del_data['count'] or 0}</div><p>Ventas: ${del_data['sum'] or 0}</p></div>
     <div class="card"><h3>Take Away Hoy</h3><div class="stat">{ta_data['count'] or 0}</div><p>Ventas: ${ta_data['sum'] or 0}</p></div>
