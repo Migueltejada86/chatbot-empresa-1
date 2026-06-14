@@ -161,10 +161,10 @@ def esta_en_horario(hora_str: str) -> bool:
     cierre = datetime.strptime("23:00", "%H:%M").time()
     return apertura <= h <= cierre
 
-def ver_mesas_disponibles(fecha_str: str, hora_str: str):
+def ver_mesas_disponibles(fecha: str, hora: str):
     try:
-        f = datetime.strptime(fecha_str, "%d/%m/%Y").date()
-        h = datetime.strptime(hora_str, "%H:%M").time()
+        f = datetime.strptime(fecha, "%d/%m/%Y").date()
+        h = datetime.strptime(hora, "%H:%M").time()
         conn = get_db()
         c = conn.cursor()
         
@@ -186,8 +186,8 @@ def ver_mesas_disponibles(fecha_str: str, hora_str: str):
         mesas_libres = personas_libres // CAPACIDAD_POR_MESA
         
         return {
-            "fecha": fecha_str,
-            "hora": hora_str,
+            "fecha": fecha,
+            "hora": hora,
             "mesas_libres": max(0, mesas_libres),
             "personas_libres": max(0, personas_libres),
             "personas_ocupadas": personas_ocupadas
