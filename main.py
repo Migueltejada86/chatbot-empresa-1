@@ -108,7 +108,7 @@ def crear_reserva(nombre: str, personas: int, fecha: str, hora: str, telefono: s
         conn = get_db()
         c = conn.cursor()
         c.execute(
-            "INSERT INTO reservas (nombre, personas, fecha, hora, telefono) VALUES (%s, %s, %s, %s) RETURNING id", 
+            "INSERT INTO reservas (nombre, personas, fecha, hora, telefono) VALUES (%s, %s, %s, %s, %s) RETURNING id", 
             (nombre, personas, datetime.strptime(fecha, "%d/%m/%Y").date(), 
              datetime.strptime(hora, "%H:%M").time(), telefono)
         )
