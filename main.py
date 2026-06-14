@@ -480,7 +480,15 @@ def get_menu():
 def ver_reservas():
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT id, nombre, personas, to_char(fecha, 'DD/MM/YYYY') as fecha, to_char(hora, 'HH24:MI') as hora, estado, telefono, comentarios, creado FROM reservas ORDER BY fecha DESC, hora DESC")
+    c.execute("""
+        SELECT id, nombre, personas, 
+               to_char(fecha, 'DD/MM/YYYY') as fecha, 
+               to_char(hora, 'HH24:MI') as hora, 
+               estado, telefono, comentarios, 
+               to_char(creado, 'DD/MM/YYYY HH24:MI') as creado 
+        FROM reservas 
+        ORDER BY fecha DESC, hora DESC
+    """)
     rows = c.fetchall()
     conn.close()
     return {"total": len(rows), "reservas": rows}

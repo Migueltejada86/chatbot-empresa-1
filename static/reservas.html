@@ -25,7 +25,12 @@
     </table>
 
 <script>
-fetch('/reservas').then(r=>r.json()).then(d=>{
+fetch('/reservas')
+  .then(r => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  })
+  .then(d => {
     document.getElementById('stats').innerHTML = `<h3>Total: ${d.total}</h3>`;
     const tbody = document.querySelector('#tabla tbody');
     tbody.innerHTML = d.reservas.map(r=>`
@@ -40,10 +45,12 @@ fetch('/reservas').then(r=>r.json()).then(d=>{
             <td>${r.comentarios || '-'}</td>
         </tr>
     `).join('');
-}).catch(err=>{
-    console.error('Error cargando reservas:', err);
-    document.querySelector('#tabla tbody').innerHTML = '<tr><td colspan="8">Error cargando datos</td></tr>';
-});
+  })
+  .catch(err => {
+    console.error('Error:', err);
+    document.querySelector('#tabla tbody').innerHTML = 
+      `<tr><td colspan="8">Error: ${err.message}</td></tr>`;
+  });
 </script>
 </body>
 </html>
