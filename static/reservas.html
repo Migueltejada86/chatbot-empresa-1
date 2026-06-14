@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Ver Reservas</title>
+    <style>
+        body { font-family: system-ui; padding: 20px; max-width: 1000px; margin: auto; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background: #ff6b35; color: white; }
+    </style>
+</head>
+<body>
+    <h1>📅 Reservas del Restaurante</h1>
+    <table id="tabla">
+        <thead>
+            <tr><th>ID</th><th>Nombre</th><th>Personas</th><th>Fecha</th><th>Hora</th><th>Creado</th></tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <script>
+        fetch('/reservas')
+           .then(r => r.json())
+           .then(data => {
+                const tbody = document.querySelector('tbody');
+                data.reservas.forEach(r => {
+                    tbody.innerHTML += `<tr>
+                        <td>${r.id}</td>
+                        <td>${r.nombre}</td>
+                        <td>${r.personas}</td>
+                        <td>${r.fecha}</td>
+                        <td>${r.hora}</td>
+                        <td>${new Date(r.creado).toLocaleString()}</td>
+                    </tr>`;
+                });
+            });
+    </script>
+</body>
+</html>

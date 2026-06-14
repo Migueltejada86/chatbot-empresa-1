@@ -12,6 +12,11 @@ app = FastAPI(title="Chatbot Restaurante")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+from fastapi.staticfiles import StaticFiles
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
 BASE_URL = "https://chatbot-empresa-1-production.up.railway.app"
 
 # DB para reservas
@@ -159,3 +164,23 @@ def health():
 @app.get("/")
 def root():
     return {"mensaje": "API Restaurante Online", "menu": "/menu", "docs": "/docs"}
+
+@app.get("/reservas")
+def ver_reservas():
+    conn = sqlite3.connect('restaurante.db')
+    c = conn.cursor()
+    c.execute("SELECT id, nombre, personas, fecha, hora, creado FROM reservas ORDER BY id DESC")
+    rows = c.fetchall()
+    conn.close()
+    
+    reservas = []
+    for row in rows:
+        reservas.append({
+            "id": row[0],
+            "nombre": row[1], 
+            "personas": row[2],
+            "fecha": row[3],
+            "hora": row[4],
+            "creado": row[5]
+        })
+    return {"total": len(reservas), "reservas": reservas}

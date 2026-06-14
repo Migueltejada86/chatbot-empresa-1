@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Restaurante Demo - Chatbot</title>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: system-ui; max-width: 800px; margin: 20px auto; padding: 20px; background: #fafafa; }
+       .container { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        #chat { background: white; border-radius: 12px; height: 500px; overflow-y: auto; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+       .msg { margin: 10px 0; padding: 10px 14px; border-radius: 18px; max-width: 80%; }
+       .user { background: #ff6b35; color: white; margin-left: auto; }
+       .bot { background: #e4e6eb; color: black; }
+       .input-area { display: flex; gap: 10px; margin-top: 10px; }
+        input { flex: 1; padding: 12px; border-radius: 20px; border: 1px solid #ccc; }
+        button { padding: 12px 20px; border-radius: 20px; border: none; background: #ff6b35; color: white; cursor: pointer; }
+       .menu-frame { background: white; border-radius: 12px; height: 560px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        iframe { width: 100%; height: 100%; border: none; border-radius: 12px; }
+    </style>
+</head>
+<body>
+    <h1>🍽️ Restaurante Demo</h1>
+    <div class="container">
+        <div>
+            <h3>Chat para Reservas</h3>
+            <div id="chat"></div>
+            <div class="input-area">
+                <input id="msg" placeholder="Pedí el menú o hacé una reserva..." onkeypress="if(event.key=='Enter')enviar()">
+                <button onclick="enviar()">Enviar</button>
+            </div>
+        </div>
+        <div>
+            <h3>Nuestro Menú</h3>
+            <div class="menu-frame">
+                <iframe src="https://chatbot-empresa-1-production.up.railway.app/menu"></iframe>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = "https://chatbot-empresa-1-production.up.railway.app/chat";
+        const chat = document.getElementById('chat');
+        const msg = document.getElementById('msg');
+        const userId = 'web_' + Date.now();
+
+        async function enviar() {
+            if (!msg.value.trim()) return;
+            const texto = msg.value;
+            chat.innerHTML += `<div class="msg user">${texto}</div>`;
+            msg.value = '';
+            chat.scrollTop = chat.scrollHeight;
+
+            try {
+                const res = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({mensaje: texto, user_id: userId})
+                });
+                const data = await res.json();
+                // Hacer links clickeables
+                let respuesta = data.respuesta.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>');
+                chat.innerHTML += `<div class="msg bot">${respuesta}</div>`;
+            } catch(e) {
+                chat.innerHTML += `<div class="msg bot">Error de conexión</div>`;
+            }
+            chat.scrollTop = chat.scrollHeight;
+        }
+        
+        // Mensaje inicial
+        chat.innerHTML = `<div class="msg bot">¡Hola! Soy el asistente de Restaurante Demo. Podés pedirme el menú o reservar una mesa 😊</div>`;
+    </script>
+</body>
+</html>
