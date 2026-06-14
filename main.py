@@ -108,10 +108,11 @@ def crear_reserva(nombre: str, personas: int, fecha: str, hora: str, telefono: s
         conn = get_db()
         c = conn.cursor()
         c.execute(
-            "INSERT INTO reservas (nombre, personas, fecha, hora, telefono) VALUES (%s,%s) RETURNING id", 
+            "INSERT INTO reservas (nombre, personas, fecha, hora, telefono) VALUES (%s,%s,%s) RETURNING id", 
             (nombre, personas, datetime.strptime(fecha, "%d/%m/%Y").date(), 
-             datetime.strptime(hora, "%H:%M").time(), telefono)
+            datetime.strptime(hora, "%H:%M").time(), telefono)
         )
+        
         reserva_id = c.fetchone()['id']
         conn.commit()
         conn.close()
@@ -208,20 +209,28 @@ async def chat(data: ChatInput):
         historial.append({"role": "user", "content": data.mensaje})
         print(f"[CHAT] Usuario {data.user_id}: {data.mensaje}")
         
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=historial,
-            tools=tools,
-            tool_choice="auto",
-            max_tokens=200
-        )
-        
-        msg = response.choices[0].message
-        historial.append(msg)
-        
-        print(f"[OPENAI] Respuesta tiene tool_calls: {bool(msg.tool_calls)}")
-        
-        if msg.tool_calls:
+        # Loop hasta que OpenAI deje de pedir tools
+        max_iteraciones = 5
+        for i in range(max_iteraciones):
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=historial,
+                tools=tools,
+                tool_choice="auto",
+                max_tokens=200
+            )
+            
+            msg = response.choices[0].message
+            historial.append(msg)
+            
+            print(f"[OPENAI] Iteración {i+1} - tool_calls: {bool(msg.tool_calls)}")
+            
+            if not msg.tool_calls:
+                respuesta_final = msg.content
+                print(f"[OPENAI] Respuesta final sin tools: {respuesta_final}")
+                break
+            
+            # Ejecutar todas las tools que pida
             for tool_call in msg.tool_calls:
                 func_name = tool_call.function.name
                 args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
@@ -235,12 +244,8 @@ async def chat(data: ChatInput):
                 
                 print(f"[TOOL] Resultado {func_name}: {result}")
                 historial.append({"role": "tool", "tool_call_id": tool_call.id, "content": json.dumps(result, ensure_ascii=False)})
-            
-            response_2 = client.chat.completions.create(model="gpt-4o-mini", messages=historial, max_tokens=200)
-            respuesta_final = response_2.choices[0].message.content
         else:
-            respuesta_final = msg.content
-            print(f"[OPENAI] Respuesta sin tools: {respuesta_final}")
+            respuesta_final = "Disculpá, hubo un error procesando tu pedido."
         
         historial.append({"role": "assistant", "content": respuesta_final})
         conversaciones[data.user_id] = historial[-12:]
@@ -249,6 +254,7 @@ async def chat(data: ChatInput):
     except Exception as e:
         print(f"[ERROR CHAT] {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/menu")
 def get_menu():
