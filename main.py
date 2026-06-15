@@ -1,6 +1,7 @@
+
 from fastapi import FastAPI, HTTPException, Request, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, HTMLResponse
+from fastapi.responses import FileResponse, Response, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -12,9 +13,13 @@ from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
 from collections import defaultdict
 from apscheduler.schedulers.background import BackgroundScheduler
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from io import BytesIO
 
-
-
+# ========================================
+# === CONFIG & SETUP
+# ========================================
 load_dotenv()
 app = FastAPI(title="El Descansito - Bot Restaurante")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -28,17 +33,19 @@ if not BASE_URL.startswith("http"):
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
+TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886") # NUMERO DE TWILIO
+ADMIN_PHONE = os.getenv("ADMIN_PHONE", "whatsapp:+5493547313398") # TU NUMERO
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) if TWILIO_ACCOUNT_SID else None
 print(f"Twilio configurado: {bool(twilio_client)}")
 
-# === CONFIG ===
 TOTAL_MESAS = 10
 DURACION_MESA_HORAS = 2.5
 COSTO_DELIVERY = 3000
 HORARIO_COCINA = {"inicio": "09:00", "fin": "23:00"}
 
-# === SECURITY: Rate Limiting ===
+# ========================================
+# === SECURITY
+# ========================================
 RATE_LIMIT = defaultdict(list)
 def check_rate_limit(telefono: str) -> bool:
     ahora = time.time()
@@ -63,7 +70,41 @@ def sanitizar_input(texto: str, telefono: str = None) -> str:
             return "No entendí. ¿Querés hacer una reserva o pedido?"
     return texto[:500]
 
-# === MENU ===
+# ========================================
+# === DATABASE
+# ========================================
+def get_db():
+    if not DATABASE_URL:
+        raise Exception("DATABASE_URL no configurada")
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+def init_db():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS reservas (
+        id SERIAL PRIMARY KEY, nombre VARCHAR(100) NOT NULL, personas INTEGER NOT NULL,
+        fecha DATE NOT NULL, hora TIME NOT NULL, telefono VARCHAR(20),
+        estado VARCHAR(20) DEFAULT 'confirmada', comentarios TEXT,
+        recordatorio_enviado BOOLEAN DEFAULT FALSE,
+        creado TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS pedidos (
+        id SERIAL PRIMARY KEY, tipo VARCHAR(20) NOT NULL,
+        nombre VARCHAR(100) NOT NULL, telefono VARCHAR(20) NOT NULL,
+        direccion TEXT, items JSONB NOT NULL, total INTEGER NOT NULL,
+        estado VARCHAR(20) DEFAULT 'pendiente',
+        comentarios TEXT, pago_tipo VARCHAR(20),
+        comprobante_url TEXT, creado TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.commit()
+    conn.close()
+    print("PostgreSQL: tablas listas")
+
+init_db()
+
+# ========================================
+# === MENU & CONSTANTES
+# ========================================
 MENU = {
     "ENTRADAS": [
         {"nombre": "Empanadas criollas", "precio": 3000},
@@ -129,35 +170,36 @@ MENU_DEL_DIA = {
     6: "Domingo: Asado banderita con papas - $18,000"
 }
 
-def get_db():
-    if not DATABASE_URL:
-        raise Exception("DATABASE_URL no configurada")
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+# ========================================
+# === WHATSAPP HELPERS
+# ========================================
+def enviar_whatsapp(numero: str, mensaje: str):
+    if not twilio_client:
+        print("[WA] Twilio no configurado")
+        return False
+    if not numero.startswith("whatsapp:"):
+        numero = f"whatsapp:{numero}"
+    try:
+        twilio_client.messages.create(body=mensaje, from_=TWILIO_WHATSAPP_NUMBER, to=numero)
+        print(f"[WA] Enviado a {numero}")
+        return True
+    except Exception as e:
+        print(f"[WA ERROR] {str(e)}")
+        return False
 
-def init_db():
-    conn = get_db()
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS reservas (
-        id SERIAL PRIMARY KEY, nombre VARCHAR(100) NOT NULL, personas INTEGER NOT NULL,
-        fecha DATE NOT NULL, hora TIME NOT NULL, telefono VARCHAR(20),
-        estado VARCHAR(20) DEFAULT 'confirmada', comentarios TEXT,
-        creado TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS pedidos (
-        id SERIAL PRIMARY KEY, tipo VARCHAR(20) NOT NULL,
-        nombre VARCHAR(100) NOT NULL, telefono VARCHAR(20) NOT NULL,
-        direccion TEXT, items JSONB NOT NULL, total INTEGER NOT NULL,
-        estado VARCHAR(20) DEFAULT 'pendiente',
-        comentarios TEXT, pago_tipo VARCHAR(20),
-        comprobante_url TEXT, creado TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''')
-    conn.commit()
-    conn.close()
-    print("PostgreSQL: tablas listas")
+def avisar_admin_nuevo_pedido(pedido_id, nombre, total, tipo):
+    if twilio_client and ADMIN_PHONE:
+        msg = f"🔔 NUEVO {tipo.upper()} #{pedido_id}\nCliente: {nombre}\nTotal: ${total}\nVer: {BASE_URL}/pedidos-page"
+        enviar_whatsapp(ADMIN_PHONE, msg)
 
-init_db()
+def avisar_admin_nueva_reserva(reserva_id, nombre, personas, fecha, hora):
+    if twilio_client and ADMIN_PHONE:
+        msg = f"🔔 NUEVA RESERVA #{reserva_id}\n{nombre} - {personas}p\n{fecha} {hora}hs\nVer: {BASE_URL}/reservas-page"
+        enviar_whatsapp(ADMIN_PHONE, msg)
 
-# === FUNCIONES NEGOCIO ===
+# ========================================
+# === RESERVAS - FUNCIONES NEGOCIO
+# ========================================
 def esta_en_horario(hora_str: str) -> bool:
     h = datetime.strptime(hora_str, "%H:%M").time()
     apertura = datetime.strptime("09:00", "%H:%M").time()
@@ -170,27 +212,18 @@ def ver_mesas_disponibles(fecha: str, hora: str):
         h = datetime.strptime(hora, "%H:%M").time()
         conn = get_db()
         c = conn.cursor()
-        
-        # FIX: Sumar personas, no contar reservas
         c.execute("""
             SELECT COALESCE(SUM(personas), 0) as personas_ocupadas 
             FROM reservas 
             WHERE fecha = %s AND hora = %s AND estado = 'confirmada'
         """, (f, h))
-        
         personas_ocupadas = c.fetchone()['personas_ocupadas']
         conn.close()
-        
-        MESAS_TOTALES = 10
-        CAPACIDAD_POR_MESA = 4
-        capacidad_total = MESAS_TOTALES * CAPACIDAD_POR_MESA  # 40 personas
-        
+        capacidad_total = TOTAL_MESAS * 4
         personas_libres = capacidad_total - personas_ocupadas
-        mesas_libres = personas_libres // CAPACIDAD_POR_MESA
-        
+        mesas_libres = personas_libres // 4
         return {
-            "fecha": fecha,
-            "hora": hora,
+            "fecha": fecha, "hora": hora,
             "mesas_libres": max(0, mesas_libres),
             "personas_libres": max(0, personas_libres),
             "personas_ocupadas": personas_ocupadas
@@ -200,19 +233,14 @@ def ver_mesas_disponibles(fecha: str, hora: str):
 
 def crear_reserva(nombre: str, personas: int, fecha: str, hora: str, telefono: str = None, comentarios: str = None):
     try:
-        print(f"[DB] Intentando crear reserva: {nombre}, {personas}, {fecha}, {hora}, tel:{telefono}")
         if not esta_en_horario(hora):
             return {"error": "Fuera de horario. Atendemos de 09:00 a 23:00hs"}
-        
         disp = ver_mesas_disponibles(fecha, hora)
-        if disp.get("error"): 
-            return disp
-            
+        if disp.get("error"): return disp
         if disp["personas_libres"] < personas:
             if disp["personas_libres"] == 0:
                 return {"error": f"No hay mesas libres el {fecha} a las {hora}"}
             return {"error": f"Solo quedan {disp['personas_libres']} lugares para {fecha} a las {hora}"}
-        
         conn = get_db()
         c = conn.cursor()
         c.execute(
@@ -223,15 +251,12 @@ def crear_reserva(nombre: str, personas: int, fecha: str, hora: str, telefono: s
         reserva_id = c.fetchone()['id']
         conn.commit()
         conn.close()
-        print(f"[DB] Reserva #{reserva_id} guardada OK")
-        
         detalle = f"Reserva #{reserva_id} para {nombre}, {personas} personas, {fecha} {hora}hs"
         if telefono:
-            detalle += f". Teléfono de contacto: {telefono}"
-        
+            detalle += f". Teléfono: {telefono}"
+        avisar_admin_nueva_reserva(reserva_id, nombre, personas, fecha, hora)
         return {"status": "confirmada", "id": reserva_id, "detalle": detalle}
     except Exception as e:
-        print(f"[ERROR crear_reserva] {str(e)}")
         return {"error": f"Error: {str(e)}"}
 
 def cancelar_reserva(nombre: str, fecha: str):
@@ -251,6 +276,9 @@ def cancelar_reserva(nombre: str, fecha: str):
     except Exception as e:
         return {"error": str(e)}
 
+# ========================================
+# === PEDIDOS - FUNCIONES NEGOCIO
+# ========================================
 def buscar_plato(nombre_plato: str):
     nombre_plato = nombre_plato.lower().strip()
     alias = {
@@ -262,7 +290,6 @@ def buscar_plato(nombre_plato: str):
     }
     if nombre_plato in alias:
         nombre_plato = alias[nombre_plato].lower()
-
     for categoria, platos in MENU.items():
         for plato in platos:
             if nombre_plato in plato["nombre"].lower():
@@ -270,23 +297,19 @@ def buscar_plato(nombre_plato: str):
     return None
 
 def crear_pedido(tipo: str, nombre: str, telefono: str, items: list, direccion: str = None, comentarios: str = "", pago_tipo: str = "efectivo"):
-    print(f"[PEDIDO] Creando: {tipo} para {nombre}, items: {items}, dir: {direccion}")
     try:
         ahora = datetime.now().time()
         hora_inicio = datetime.strptime(HORARIO_COCINA["inicio"], "%H:%M").time()
         hora_fin = datetime.strptime(HORARIO_COCINA["fin"], "%H:%M").time()
         if not (hora_inicio <= ahora <= hora_fin):
             return {"error": f"Cocina cerrada. Horario: {HORARIO_COCINA['inicio']} a {HORARIO_COCINA['fin']}hs"}
-
         total = sum(item["precio"] * item["cantidad"] for item in items)
         if tipo == "delivery":
             if not direccion:
                 return {"error": "Delivery necesita dirección"}
             total += COSTO_DELIVERY
-
         conn = get_db()
         c = conn.cursor()
-        # FIX: 8 columnas, 8 placeholders
         c.execute(
             """INSERT INTO pedidos (tipo, nombre, telefono, direccion, items, total, comentarios, pago_tipo)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
@@ -295,32 +318,28 @@ def crear_pedido(tipo: str, nombre: str, telefono: str, items: list, direccion: 
         pedido_id = c.fetchone()['id']
         conn.commit()
         conn.close()
-        print(f"[PEDIDO] #{pedido_id} guardado OK - Total: ${total}")
+        avisar_admin_nuevo_pedido(pedido_id, nombre, total, tipo)
         return {"status": "creado", "id": pedido_id, "total": total, "detalle": f"Pedido #{pedido_id} {tipo}. Total: ${total}"}
     except Exception as e:
-        print(f"[ERROR crear_pedido] {str(e)}")
         return {"error": f"Error: {str(e)}"}
 
 def actualizar_estado_pedido(pedido_id: int, nuevo_estado: str):
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("UPDATE pedidos SET estado=%s WHERE id=%s RETURNING telefono, tipo", (nuevo_estado, pedido_id))
+        c.execute("UPDATE pedidos SET estado=%s WHERE id=%s RETURNING telefono, tipo, nombre", (nuevo_estado, pedido_id))
         row = c.fetchone()
         conn.commit()
         conn.close()
-        if row and twilio_client:
-            telefono = row['telefono']
-            if nuevo_estado == "en_camino" and row['tipo'] == 'delivery':
-                twilio_client.messages.create(
-                    body=f"Tu pedido #{pedido_id} de El Descansito está en camino 🛵",
-                    from_=TWILIO_WHATSAPP_NUMBER,
-                    to=telefono
-                )
+        if row and nuevo_estado == "en_camino" and row['tipo'] == 'delivery':
+            enviar_whatsapp(row['telefono'], f"Tu pedido #{pedido_id} de El Descansito está en camino 🛵")
         return {"status": "ok", "detalle": f"Pedido #{pedido_id} actualizado a {nuevo_estado}"}
     except Exception as e:
         return {"error": str(e)}
 
+# ========================================
+# === OPENAI / CHATBOT
+# ========================================
 def enviar_menu():
     return {"url": f"{BASE_URL}/menu", "mensaje": "Acá tenés nuestro menú completo"}
 
@@ -328,7 +347,6 @@ def obtener_menu_del_dia():
     hoy = datetime.now().weekday()
     return {"menu": MENU_DEL_DIA[hoy]}
 
-# === OPENAI TOOLS ===
 tools = [
     {"type": "function", "function": {"name": "enviar_menu", "description": "Envía el link del menú completo"}},
     {"type": "function", "function": {"name": "obtener_menu_del_dia", "description": "Dice el menú del día/plato especial"}},
@@ -405,21 +423,13 @@ def procesar_mensaje(user_id: str, mensaje: str, telefono: str = None) -> str:
     try:
         if telefono and not check_rate_limit(telefono):
             return "Estás enviando muchos mensajes. Esperá 1 minuto."
-
         mensaje = sanitizar_input(mensaje, telefono)
-        print(f"[CHAT] Usuario {user_id}: {mensaje}")
-
         historial = conversaciones.get(user_id, [{"role": "system", "content": SYSTEM_PROMPT}])
-
         if len(historial) > 1 and historial[-1].get("role") == "tool":
-            print("[HISTORIAL] Corrupto detectado, reiniciando")
             historial = [{"role": "system", "content": SYSTEM_PROMPT}]
-
         if telefono:
             mensaje = f"{mensaje}\n[Contexto: número {telefono}]"
-
         historial.append({"role": "user", "content": mensaje})
-
         for i in range(5):
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -431,25 +441,16 @@ def procesar_mensaje(user_id: str, mensaje: str, telefono: str = None) -> str:
             )
             msg = response.choices[0].message
             historial.append(msg)
-            print(f"[OPENAI] Iteración {i+1} - tool_calls: {bool(msg.tool_calls)}")
-
             if not msg.tool_calls:
                 respuesta_final = msg.content
-                print(f"[OPENAI] Respuesta final sin tools: {respuesta_final}")
                 break
-
             for tool_call in msg.tool_calls:
                 func_name = tool_call.function.name
                 args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
-
-                # FIX: Pasar telefono automaticamente a crear_reserva y crear_pedido
                 if telefono and func_name in ["crear_reserva", "crear_pedido"]:
                     telefono_limpio = telefono.replace("whatsapp:", "").replace("+", "")
                     if not args.get("telefono"):
                         args["telefono"] = telefono_limpio
-
-                print(f"[TOOL] Ejecutando {func_name} con args: {args}")
-
                 if func_name == "enviar_menu": result = enviar_menu()
                 elif func_name == "obtener_menu_del_dia": result = obtener_menu_del_dia()
                 elif func_name == "ver_mesas_disponibles": result = ver_mesas_disponibles(**args)
@@ -457,37 +458,34 @@ def procesar_mensaje(user_id: str, mensaje: str, telefono: str = None) -> str:
                 elif func_name == "crear_pedido": result = crear_pedido(**args)
                 elif func_name == "cancelar_reserva": result = cancelar_reserva(**args)
                 else: result = {"error": "funcion desconocida"}
-
-                print(f"[TOOL] Resultado {func_name}: {result}")
                 historial.append({"role": "tool", "tool_call_id": tool_call.id, "content": json.dumps(result, ensure_ascii=False)})
             else:
                 respuesta_final = "Disculpá, hubo un error."
-
         historial.append({"role": "assistant", "content": respuesta_final})
         conversaciones[user_id] = historial[-12:]
         return respuesta_final
-
     except Exception as e:
         print(f"[ERROR CHAT] {str(e)}")
         conversaciones[user_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
         return "Hubo un error. Probá de nuevo."
 
-
-
+# ========================================
+# === SCHEDULER - RECORDATORIOS
+# ========================================
 def enviar_recordatorios():
     conn = get_db()
     c = conn.cursor()
-    # Reservas en 2hs que no se confirmaron
     c.execute("""
-        SELECT id, nombre, telefono, fecha, hora 
+        SELECT id, nombre, telefono, fecha, to_char(hora, 'HH24:MI') as hora 
         FROM reservas 
         WHERE estado='confirmada' 
         AND fecha = CURRENT_DATE
         AND hora BETWEEN NOW() + INTERVAL '1 hour 55 minutes' AND NOW() + INTERVAL '2 hours 5 minutes'
         AND recordatorio_enviado = FALSE
+        AND telefono IS NOT NULL
     """)
     for r in c.fetchall():
-        msg = f"Hola {r['nombre']}, te recordamos tu reserva hoy a las {r['hora']} en El Descansito. ¿Confirmás? Respondé SI o CANCELAR"
+        msg = f"Hola {r['nombre']} 👋 Te recordamos tu reserva hoy a las {r['hora']} en El Descansito. ¿Confirmás? Respondé SI para confirmar o CANCELAR si no podés venir."
         enviar_whatsapp(r['telefono'], msg)
         c.execute("UPDATE reservas SET recordatorio_enviado=TRUE WHERE id=%s", (r['id'],))
     conn.commit()
@@ -497,9 +495,155 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(enviar_recordatorios, 'interval', minutes=5)
 scheduler.start()
 
+# ========================================
+# === ENDPOINTS - CHAT & WEBHOOK
+# ========================================
+@app.post("/chat")
+async def chat(data: ChatInput):
+    respuesta = procesar_mensaje(data.user_id, data.mensaje)
+    return {"respuesta": respuesta}
 
+@app.post("/webhook")
+async def whatsapp_webhook(
+    From: str = Form(...), Body: str = Form(...),
+    MediaUrl0: str = Form(None), MediaContentType0: str = Form(None)
+):
+    try:
+        if MediaUrl0 and "pdf" in str(MediaContentType0):
+            resp = MessagingResponse()
+            resp.message("Recibimos tu comprobante. Ya lo cargamos, va en camino a tu domicilio 🛵")
+            return Response(content=str(resp), media_type="application/xml")
+        respuesta = procesar_mensaje(user_id=From, mensaje=Body, telefono=From)
+        resp = MessagingResponse()
+        resp.message(respuesta)
+        return Response(content=str(resp), media_type="application/xml")
+    except Exception as e:
+        print(f"[ERROR WHATSAPP] {str(e)}")
+        resp = MessagingResponse()
+        resp.message("Error. Intentá de nuevo.")
+        return Response(content=str(resp), media_type="application/xml")
 
-# === ENDPOINTS ===
+# ========================================
+# === ENDPOINTS - RESERVAS
+# ========================================
+@app.get("/reservas")
+def ver_reservas():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, nombre, personas, 
+               to_char(fecha, 'DD/MM/YYYY') as fecha, 
+               to_char(hora, 'HH24:MI') as hora, 
+               estado, telefono, comentarios, 
+               to_char(creado, 'DD/MM/YYYY HH24:MI') as creado 
+        FROM reservas 
+        ORDER BY fecha DESC, hora DESC
+    """)
+    rows = c.fetchall()
+    conn.close()
+    return {"total": len(rows), "reservas": rows}
+
+@app.post("/cancelar-reserva/{reserva_id}")
+def cancelar_reserva_endpoint(reserva_id: int):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("UPDATE reservas SET estado='cancelada' WHERE id=%s AND estado='confirmada'", (reserva_id,))
+        if c.rowcount == 0:
+            conn.close()
+            return {"error": "Reserva no encontrada o ya cancelada"}
+        conn.commit()
+        conn.close()
+        return {"ok": True, "mensaje": f"Reserva #{reserva_id} cancelada"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/reserva/{reserva_id}")
+def get_reserva(reserva_id: int):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM reservas WHERE id=%s", (reserva_id,))
+    r = c.fetchone()
+    conn.close()
+    if not r: return {"error": "No encontrada"}
+    return dict(r)
+
+@app.put("/editar-reserva/{reserva_id}")
+def editar_reserva(reserva_id: int, data: dict):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        if any(k in data for k in ['fecha', 'hora', 'personas']):
+            c.execute("SELECT personas FROM reservas WHERE id=%s", (reserva_id,))
+            personas_viejas = c.fetchone()['personas']
+            fecha = data.get('fecha')
+            hora = data.get('hora')
+            personas = data.get('personas', personas_viejas)
+            disp = ver_mesas_disponibles(fecha, hora)
+            if disp["personas_libres"] + personas_viejas < personas:
+                return {"error": f"Solo quedan {disp['personas_libres'] + personas_viejas} lugares"}
+        set_clause = ", ".join([f"{k}=%s" for k in data.keys()])
+        values = list(data.values()) + [reserva_id]
+        c.execute(f"UPDATE reservas SET {set_clause} WHERE id=%s", values)
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/reserva-walk-in")
+async def reserva_walk_in(request: Request):
+    data = await request.json()
+    ahora = datetime.now()
+    return crear_reserva(
+        nombre=data['nombre'],
+        personas=data['personas'],
+        fecha=ahora.strftime("%d/%m/%Y"),
+        hora=ahora.strftime("%H:%M"),
+        comentarios="Walk-in"
+    )
+
+# ========================================
+# === ENDPOINTS - PEDIDOS
+# ========================================
+@app.get("/pedidos")
+def ver_pedidos():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT id, tipo, nombre, telefono, direccion, items, total, estado, comentarios, pago_tipo, creado FROM pedidos ORDER BY creado DESC")
+    rows = c.fetchall()
+    conn.close()
+    return {"total": len(rows), "pedidos": rows}
+
+@app.post("/pedidos/{pedido_id}/estado")
+def cambiar_estado_pedido(pedido_id: int, estado: str = Form(...)):
+    return actualizar_estado_pedido(pedido_id, estado)
+
+@app.post("/pedidos/{pedido_id}/enviar")
+def marcar_enviado(pedido_id: int):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""
+        UPDATE pedidos SET estado='en_camino' 
+        WHERE id=%s AND estado='pendiente' 
+        RETURNING telefono, nombre, total, direccion, tipo
+    """, (pedido_id,))
+    row = c.fetchone()
+    conn.commit()
+    conn.close()
+    if not row:
+        return {"error": "Pedido no encontrado o ya fue enviado"}
+    if row['tipo'] == 'delivery' and row['telefono']:
+        msg = f"🛵 {row['nombre']}, tu pedido #{pedido_id} salió para {row['direccion']}. Total: ${row['total']}. Llega en 20-30 min aprox."
+        if enviar_whatsapp(row['telefono'], msg):
+            return {"ok": True, "detalle": f"Cliente {row['nombre']} notificado"}
+        else:
+            return {"error": "Pedido marcado pero WhatsApp falló"}
+    return {"ok": True, "detalle": "Pedido marcado como enviado"}
+
+# ========================================
+# === ENDPOINTS - CHAT & WEBHOOK
+# ========================================
 @app.post("/chat")
 async def chat(data: ChatInput):
     respuesta = procesar_mensaje(data.user_id, data.mensaje)
@@ -527,12 +671,9 @@ async def whatsapp_webhook(
         resp.message("Error. Intentá de nuevo.")
         return Response(content=str(resp), media_type="application/xml")
 
-@app.get("/menu")
-def get_menu():
-    if not os.path.exists("data/menu.pdf"):
-        raise HTTPException(status_code=404, detail="Menú no encontrado")
-    return FileResponse("data/menu.pdf", media_type='application/pdf')
-
+# ========================================
+# === ENDPOINTS - RESERVAS API
+# ========================================
 @app.get("/reservas")
 def ver_reservas():
     conn = get_db()
@@ -550,8 +691,18 @@ def ver_reservas():
     conn.close()
     return {"total": len(rows), "reservas": rows}
 
+@app.get("/reserva/{reserva_id}")
+def get_reserva(reserva_id: int):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM reservas WHERE id=%s", (reserva_id,))
+    r = c.fetchone()
+    conn.close()
+    if not r: return {"error": "No encontrada"}
+    return dict(r)
+
 @app.post("/cancelar-reserva/{reserva_id}")
-def cancelar_reserva(reserva_id: int):
+def cancelar_reserva_endpoint(reserva_id: int):
     try:
         conn = get_db()
         c = conn.cursor()
@@ -565,8 +716,44 @@ def cancelar_reserva(reserva_id: int):
     except Exception as e:
         return {"error": str(e)}
 
+@app.put("/editar-reserva/{reserva_id}")
+def editar_reserva(reserva_id: int, data: dict):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        if any(k in data for k in ['fecha', 'hora', 'personas']):
+            c.execute("SELECT personas FROM reservas WHERE id=%s", (reserva_id,))
+            personas_viejas = c.fetchone()['personas']
+            fecha = data.get('fecha')
+            hora = data.get('hora')
+            personas = data.get('personas', personas_viejas)
+            disp = ver_mesas_disponibles(fecha, hora)
+            if disp["personas_libres"] + personas_viejas < personas:
+                return {"error": f"Solo quedan {disp['personas_libres'] + personas_viejas} lugares"}
+        set_clause = ", ".join([f"{k}=%s" for k in data.keys()])
+        values = list(data.values()) + [reserva_id]
+        c.execute(f"UPDATE reservas SET {set_clause} WHERE id=%s", values)
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except Exception as e:
+        return {"error": str(e)}
 
+@app.post("/reserva-walk-in")
+async def reserva_walk_in(request: Request):
+    data = await request.json()
+    ahora = datetime.now()
+    return crear_reserva(
+        nombre=data['nombre'],
+        personas=data['personas'],
+        fecha=ahora.strftime("%d/%m/%Y"),
+        hora=ahora.strftime("%H:%M"),
+        comentarios="Walk-in"
+    )
 
+# ========================================
+# === ENDPOINTS - PEDIDOS API
+# ========================================
 @app.get("/pedidos")
 def ver_pedidos():
     conn = get_db()
@@ -580,46 +767,47 @@ def ver_pedidos():
 def cambiar_estado_pedido(pedido_id: int, estado: str = Form(...)):
     return actualizar_estado_pedido(pedido_id, estado)
 
+@app.post("/pedidos/{pedido_id}/enviar")
+def marcar_enviado(pedido_id: int):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""
+        UPDATE pedidos SET estado='en_camino' 
+        WHERE id=%s AND estado='pendiente' 
+        RETURNING telefono, nombre, total, direccion, tipo
+    """, (pedido_id,))
+    row = c.fetchone()
+    conn.commit()
+    conn.close()
+    
+    if not row:
+        return {"error": "Pedido no encontrado o ya fue enviado"}
+    
+    if row['tipo'] == 'delivery' and twilio_client and row['telefono']:
+        telefono = row['telefono']
+        if not telefono.startswith('whatsapp:'):
+            telefono = f"whatsapp:{telefono}"
+        msg = f"🛵 {row['nombre']}, tu pedido #{pedido_id} salió para {row['direccion']}. Total: ${row['total']}. Llega en 20-30 min aprox."
+        try:
+            twilio_client.messages.create(body=msg, from_=TWILIO_WHATSAPP_NUMBER, to=telefono)
+            return {"ok": True, "detalle": f"Cliente {row['nombre']} notificado"}
+        except Exception as e:
+            return {"error": f"Pedido marcado pero WhatsApp falló: {str(e)}"}
+    
+    return {"ok": True, "detalle": "Pedido marcado como enviado"}
+
+# ========================================
+# === ENDPOINTS - PÁGINAS HTML
+# ========================================
+@app.get("/menu")
+def get_menu():
+    if not os.path.exists("data/menu.pdf"):
+        raise HTTPException(status_code=404, detail="Menú no encontrado")
+    return FileResponse("data/menu.pdf", media_type='application/pdf')
+
 @app.get("/chats")
 def chats_page():
     return FileResponse("static/chats.html")
-
-@app.get("/reserva/{reserva_id}")
-def get_reserva(reserva_id: int):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT * FROM reservas WHERE id=%s", (reserva_id,))
-    r = c.fetchone()
-    conn.close()
-    if not r: return {"error": "No encontrada"}
-    return dict(r)
-
-@app.put("/editar-reserva/{reserva_id}")
-def editar_reserva(reserva_id: int, data: dict):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        # Validar capacidad si cambia fecha/hora/personas
-        if any(k in data for k in ['fecha', 'hora', 'personas']):
-            c.execute("SELECT personas FROM reservas WHERE id=%s", (reserva_id,))
-            personas_viejas = c.fetchone()['personas']
-            fecha = data.get('fecha')
-            hora = data.get('hora')
-            personas = data.get('personas', personas_viejas)
-            
-            disp = ver_mesas_disponibles(fecha, hora)
-            # Sumar las personas que ya tenía esta reserva
-            if disp["personas_libres"] + personas_viejas < personas:
-                return {"error": f"Solo quedan {disp['personas_libres'] + personas_viejas} lugares"}
-        
-        set_clause = ", ".join([f"{k}=%s" for k in data.keys()])
-        values = list(data.values()) + [reserva_id]
-        c.execute(f"UPDATE reservas SET {set_clause} WHERE id=%s", values)
-        conn.commit()
-        conn.close()
-        return {"ok": True}
-    except Exception as e:
-        return {"error": str(e)}
 
 @app.get("/reservas-page")
 def reservas_page():
@@ -628,19 +816,6 @@ def reservas_page():
 @app.get("/pedidos-page")
 def pedidos_page():
     return FileResponse("static/pedidos.html")
-#!
-@app.post("/reserva-walk-in")
-def reserva_walk_in(data: dict):
-    # data = {nombre, personas, mesa}
-    ahora = datetime.now()
-    return crear_reserva(
-        data['nombre'], 
-        data['personas'], 
-        ahora.strftime("%d/%m/%Y"), 
-        ahora.strftime("%H:%M"),
-        comentarios="Walk-in"
-    )
-
 
 @app.get("/panel")
 def panel_admin():
@@ -650,7 +825,6 @@ def panel_admin():
     mes_actual = hoy.month
     anio_actual = hoy.year
     
-    # Reservas
     c.execute("SELECT COUNT(*) as total FROM reservas WHERE fecha=%s AND estado='confirmada'", (hoy,))
     reservas_hoy = c.fetchone()['total']
     
@@ -660,21 +834,18 @@ def panel_admin():
     c.execute("SELECT COUNT(*) as total FROM reservas WHERE estado='confirmada'")
     reservas_total = c.fetchone()['total']
     
-    # Pedidos Delivery
     c.execute("SELECT COUNT(*) as count, COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='delivery' AND DATE(creado)=%s", (hoy,))
     del_hoy = c.fetchone()
     
     c.execute("SELECT COUNT(*) as count, COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='delivery' AND EXTRACT(MONTH FROM creado)=%s AND EXTRACT(YEAR FROM creado)=%s", (mes_actual, anio_actual))
     del_mes = c.fetchone()
     
-    # Pedidos Takeaway
     c.execute("SELECT COUNT(*) as count, COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='takeaway' AND DATE(creado)=%s", (hoy,))
     ta_hoy = c.fetchone()
     
     c.execute("SELECT COUNT(*) as count, COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='takeaway' AND EXTRACT(MONTH FROM creado)=%s AND EXTRACT(YEAR FROM creado)=%s", (mes_actual, anio_actual))
     ta_mes = c.fetchone()
     
-    # Próximas 5 reservas
     c.execute("""
         SELECT nombre, personas, to_char(fecha, 'DD/MM') as fecha, to_char(hora, 'HH24:MI') as hora 
         FROM reservas 
@@ -699,16 +870,18 @@ def panel_admin():
     .nav{{background:white;padding:15px;border-radius:8px;margin-bottom:20px}}
     </style></head><body>
     <h1>🍽 El Descansito - Panel</h1>
-
     <div class="nav">
         <a href="/reservas-page">Ver Reservas</a>
         <a href="/pedidos-page">Ver Pedidos</a>
         <a href="/chats-page">Ver Chats</a>
         <button onclick="walkIn()" style="background:#27ae60;color:white;border:none;padding:8px 15px;border-radius:4px;cursor:pointer;float:right">+ Walk-In</button>
     </div>
-
-    ...todo el grid y las cards...
-
+    <div class="grid">
+        <div class="card"><div class="label">Reservas Hoy</div><div class="stat">{reservas_hoy}</div></div>
+        <div class="card"><div class="label">Reservas Mes</div><div class="stat">{reservas_mes}</div></div>
+        <div class="card"><div class="label">Delivery Hoy</div><div class="stat">{del_hoy['count']}</div><div class="substat">${del_hoy['sum']}</div></div>
+        <div class="card"><div class="label">Takeaway Hoy</div><div class="stat">{ta_hoy['count']}</div><div class="substat">${ta_hoy['sum']}</div></div>
+    </div>
     <div class="card">
         <h3>Próximas Reservas</h3>
         <table>
@@ -716,21 +889,16 @@ def panel_admin():
             <tbody>{proximas_html or '<tr><td colspan="4">Sin reservas próximas</td></tr>'}</tbody>
         </table>
     </div>
-
     <script>
     function walkIn() {{
         const nombre = prompt("Nombre del cliente:");
         if(!nombre) return;
         const personas = prompt("Cantidad de personas:");
         if(!personas || isNaN(personas)) return;
-        
         fetch('/reserva-walk-in', {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({{
-                nombre: nombre,
-                personas: parseInt(personas)
-            }})
+            body: JSON.stringify({{nombre: nombre, personas: parseInt(personas)}})
         }}).then(r=>r.json()).then(d => {{
             if(d.status === 'confirmada') {{
                 alert(`Walk-in cargado: ${d.detalle}`);
@@ -745,12 +913,9 @@ def panel_admin():
     """
     return HTMLResponse(content=html)
 
-
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from io import BytesIO
-from fastapi.responses import StreamingResponse
-
+# ========================================
+# === ENDPOINTS - REPORTES
+# ========================================
 @app.get("/reporte-dia")
 def reporte_dia(fecha: str = None):
     if not fecha:
@@ -760,34 +925,24 @@ def reporte_dia(fecha: str = None):
     
     conn = get_db()
     c = conn.cursor()
-    
-    # Ventas del día
     c.execute("SELECT COALESCE(SUM(total),0) as sum, COUNT(*) as count FROM pedidos WHERE DATE(creado)=%s AND tipo='delivery'", (fecha,))
     del_dia = c.fetchone()
     c.execute("SELECT COALESCE(SUM(total),0) as sum, COUNT(*) as count FROM pedidos WHERE DATE(creado)=%s AND tipo='takeaway'", (fecha,))
     ta_dia = c.fetchone()
-    
-    # Reservas
     c.execute("SELECT COUNT(*) as count, COALESCE(SUM(personas),0) as personas FROM reservas WHERE fecha=%s AND estado='confirmada'", (fecha,))
     res_dia = c.fetchone()
     c.execute("SELECT COUNT(*) as count FROM reservas WHERE fecha=%s AND estado='cancelada'", (fecha,))
     res_cancel = c.fetchone()
-    
-    # Semana
     c.execute("SELECT COALESCE(SUM(total),0) as sum FROM pedidos WHERE creado >= %s - INTERVAL '7 days'", (fecha,))
     venta_semana = c.fetchone()['sum']
-    
-    # Mes
     c.execute("SELECT COALESCE(SUM(total),0) as sum FROM pedidos WHERE EXTRACT(MONTH FROM creado)=%s AND EXTRACT(YEAR FROM creado)=%s", (fecha.month, fecha.year))
     venta_mes = c.fetchone()['sum']
-    
     conn.close()
     
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     p.setFont("Helvetica-Bold", 16)
     p.drawString(100, 800, f"Reporte El Descansito - {fecha.strftime('%d/%m/%Y')}")
-    
     p.setFont("Helvetica", 12)
     y = 760
     p.drawString(100, y, f"Delivery: {del_dia['count']} pedidos - ${del_dia['sum']}"); y -= 20
@@ -796,20 +951,32 @@ def reporte_dia(fecha: str = None):
     p.drawString(100, y, f"Reservas canceladas: {res_cancel['count']}"); y -= 30
     p.drawString(100, y, f"Venta semana: ${venta_semana}"); y -= 20
     p.drawString(100, y, f"Venta mes: ${venta_mes}"); y -= 20
-    
     p.showPage()
     p.save()
     buffer.seek(0)
-    
     return StreamingResponse(buffer, media_type="application/pdf", 
                            headers={"Content-Disposition": f"attachment; filename=reporte_{fecha}.pdf"})
 
-
-
-
+# ========================================
+# === ENDPOINTS - UTILIDADES
+# ========================================
 @app.get("/health")
 def health():
     return {"status": "ok", "db": "postgres", "whatsapp": "enabled" if twilio_client else "disabled"}
+
+@app.get("/stats")
+def get_stats():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""
+        SELECT 
+            (SELECT COUNT(*) FROM reservas WHERE estado='confirmada') as reservas_total,
+            (SELECT COUNT(*) FROM pedidos WHERE tipo='delivery') as delivery_total,
+            (SELECT COALESCE(SUM(total),0) FROM pedidos) as facturado_total
+    """)
+    data = c.fetchone()
+    conn.close()
+    return dict(data)
 
 @app.get("/")
 def root():
@@ -817,7 +984,7 @@ def root():
     <html><head><title>El Descansito</title><meta charset="UTF-8">
     <style>
         body{font-family:Arial;background:#f5f5f5;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-        .box{background:white;padding:40px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);text-align:center}
+        .box{background:white;padding:40px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0.1);text-align:center}
         h1{color:#e67e22;margin:0 0 30px 0}
         a{display:block;background:#e67e22;color:white;padding:15px 30px;margin:10px 0;text-decoration:none;border-radius:4px;font-size:18px}
         a:hover{background:#d35400}

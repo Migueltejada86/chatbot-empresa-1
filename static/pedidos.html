@@ -4,38 +4,57 @@
     <title>Pedidos - El Descansito</title>
     <meta charset="UTF-8">
     <style>
-        body{font-family:Arial;padding:20px;background:#f5f5f5}
+        body{font-family:Arial;padding:20px;background:#f5f5f5;margin:0}
         h1{color:#e67e22}
-        table{width:100%;background:white;border-collapse:collapse;margin-top:20px}
-        th,td{padding:12px;border:1px solid #ddd;text-align:left}
+        table{width:100%;background:white;border-collapse:collapse;margin-top:20px;font-size:14px}
+        th,td{padding:10px;border:1px solid #ddd;text-align:left}
         th{background:#e67e22;color:white}
-        .estado{padding:4px 8px;border-radius:4px;font-size:12px}
+        .estado{padding:4px 8px;border-radius:4px;font-size:12px;font-weight:bold}
         .pendiente{background:#f39c12;color:white}
         .en_camino{background:#3498db;color:white}
         .entregado{background:#27ae60;color:white}
+        button{background:#27ae60;color:white;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px}
+        button:hover{background:#229954}
+        .nav{background:white;padding:15px;border-radius:8px;margin-bottom:20px}
+        .nav a{color:#3498db;text-decoration:none;margin-right:15px}
     </style>
 </head>
 <body>
-    <h1>🍽 Pedidos</h1>
+    <div class="nav">
+        <a href="/">🏠 Home</a>
+        <a href="/panel">📊 Panel</a>
+        <a href="/reservas-page">📅 Reservas</a>
+    </div>
+    
+    <h1>🛵 Pedidos</h1>
     <div id="stats"></div>
     <table id="tabla">
         <thead>
             <tr>
                 <th>ID</th><th>Tipo</th><th>Cliente</th><th>Teléfono</th>
-                <th>Dirección</th><th>Items</th><th>Total</th><th>Estado</th><th>Fecha</th>
+                <th>Dirección</th><th>Items</th><th>Total</th><th>Estado</th><th>Fecha</th><th>Acción</th>
             </tr>
         </thead>
         <tbody></tbody>
     </table>
 
 <script>
+function enviar(id) {
+    if(!confirm('¿Marcar pedido como enviado? Se avisa al cliente por WhatsApp')) return;
+    fetch(`/pedidos/${id}/enviar`, {method: 'POST'})
+    .then(r=>r.json()).then(d => {
+        alert(d.detalle || d.error);
+        location.reload();
+    });
+}
+
 fetch('/pedidos').then(r=>r.json()).then(d=>{
     document.getElementById('stats').innerHTML = `<h3>Total: ${d.total}</h3>`;
     const tbody = document.querySelector('#tabla tbody');
     tbody.innerHTML = d.pedidos.map(p=>{
-        // FIX: items ya es objeto, no hace falta parsear
         const items = Array.isArray(p.items) ? p.items : JSON.parse(p.items || '[]');
         const itemsTexto = items.map(i=>`${i.cantidad}x ${i.nombre}`).join(', ');
+        const btnEnviar = p.estado === 'pendiente' ? `<button onclick="enviar(${p.id})">📦 Enviar</button>` : '-';
         
         return `<tr>
             <td>#${p.id}</td>
@@ -46,12 +65,13 @@ fetch('/pedidos').then(r=>r.json()).then(d=>{
             <td>${itemsTexto}</td>
             <td>$${p.total}</td>
             <td><span class="estado ${p.estado}">${p.estado}</span></td>
-            <td>${p.creado || '-'}</td>
+            <td>${new Date(p.creado).toLocaleString('es-AR')}</td>
+            <td>${btnEnviar}</td>
         </tr>`
     }).join('');
 }).catch(err=>{
-    console.error('Error cargando pedidos:', err);
-    document.querySelector('#tabla tbody').innerHTML = '<tr><td colspan="9">Error cargando datos</td></tr>';
+    console.error('Error:', err);
+    document.querySelector('#tabla tbody').innerHTML = '<tr><td colspan="10">Error cargando datos</td></tr>';
 });
 </script>
 </body>
