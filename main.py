@@ -824,4 +824,21 @@ def health():
 
 @app.get("/")
 def root():
-    return {"servicio": "El Descansito Bot", "panel": "/panel", "webhook": "/webhook", "chats": "/chats"}
+    return HTMLResponse(content="""
+    <html><head><title>El Descansito</title><meta charset="UTF-8">
+    <style>
+        body{font-family:Arial;background:#f5f5f5;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+        .box{background:white;padding:40px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);text-align:center}
+        h1{color:#e67e22;margin:0 0 30px 0}
+        a{display:block;background:#e67e22;color:white;padding:15px 30px;margin:10px 0;text-decoration:none;border-radius:4px;font-size:18px}
+        a:hover{background:#d35400}
+    </style></head><body>
+    <div class="box">
+        <h1>🍽 El Descansito</h1>
+        <a href="/panel">📊 Panel Admin</a>
+        <a href="/reservas-page">📅 Reservas</a>
+        <a href="/pedidos-page">🛵 Pedidos</a>
+        <a href="/docs">📖 API Docs</a>
+    </div>
+    </body></html>
+    """)
