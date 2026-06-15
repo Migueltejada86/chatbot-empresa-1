@@ -14,6 +14,7 @@ from collections import defaultdict
 from apscheduler.schedulers.background import BackgroundScheduler
 
 
+
 load_dotenv()
 app = FastAPI(title="El Descansito - Bot Restaurante")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -471,7 +472,7 @@ def procesar_mensaje(user_id: str, mensaje: str, telefono: str = None) -> str:
         conversaciones[user_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
         return "Hubo un error. Probá de nuevo."
 
-from apscheduler.schedulers.background import BackgroundScheduler
+
 
 def enviar_recordatorios():
     conn = get_db()
@@ -698,39 +699,16 @@ def panel_admin():
     .nav{{background:white;padding:15px;border-radius:8px;margin-bottom:20px}}
     </style></head><body>
     <h1>🍽 El Descansito - Panel</h1>
-    
+
     <div class="nav">
         <a href="/reservas-page">Ver Reservas</a>
         <a href="/pedidos-page">Ver Pedidos</a>
         <a href="/chats-page">Ver Chats</a>
+        <button onclick="walkIn()" style="background:#27ae60;color:white;border:none;padding:8px 15px;border-radius:4px;cursor:pointer;float:right">+ Walk-In</button>
     </div>
-    
-    <div class="grid">
-        <div class="card">
-            <div class="label">Reservas</div>
-            <div class="stat">{reservas_hoy}</div>
-            <div class="substat">Hoy</div>
-            <div class="substat">Este mes: {reservas_mes}</div>
-            <div class="substat">Total: {reservas_total}</div>
-        </div>
-        
-        <div class="card">
-            <div class="label">Delivery</div>
-            <div class="stat">{del_hoy['count'] or 0}</div>
-            <div class="substat">Hoy: ${del_hoy['sum'] or 0}</div>
-            <div class="substat">Mes: {del_mes['count'] or 0} pedidos</div>
-            <div class="substat">Mes: ${del_mes['sum'] or 0}</div>
-        </div>
-        
-        <div class="card">
-            <div class="label">Take Away</div>
-            <div class="stat">{ta_hoy['count'] or 0}</div>
-            <div class="substat">Hoy: ${ta_hoy['sum'] or 0}</div>
-            <div class="substat">Mes: {ta_mes['count'] or 0} pedidos</div>
-            <div class="substat">Mes: ${ta_mes['sum'] or 0}</div>
-        </div>
-    </div>
-    
+
+    ...todo el grid y las cards...
+
     <div class="card">
         <h3>Próximas Reservas</h3>
         <table>
@@ -738,6 +716,31 @@ def panel_admin():
             <tbody>{proximas_html or '<tr><td colspan="4">Sin reservas próximas</td></tr>'}</tbody>
         </table>
     </div>
+
+    <script>
+    function walkIn() {{
+        const nombre = prompt("Nombre del cliente:");
+        if(!nombre) return;
+        const personas = prompt("Cantidad de personas:");
+        if(!personas || isNaN(personas)) return;
+        
+        fetch('/reserva-walk-in', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{
+                nombre: nombre,
+                personas: parseInt(personas)
+            }})
+        }}).then(r=>r.json()).then(d => {{
+            if(d.status === 'confirmada') {{
+                alert(`Walk-in cargado: ${d.detalle}`);
+                location.reload();
+            }} else {{
+                alert('Error: ' + d.error);
+            }}
+        }});
+    }}
+    </script>
     </body></html>
     """
     return HTMLResponse(content=html)
@@ -801,6 +804,19 @@ def reporte_dia(fecha: str = None):
     return StreamingResponse(buffer, media_type="application/pdf", 
                            headers={"Content-Disposition": f"attachment; filename=reporte_{fecha}.pdf"})
 
+
+
+@app.post("/reserva-walk-in")
+async def reserva_walk_in(request: Request):
+    data = await request.json()
+    ahora = datetime.now()
+    return crear_reserva(
+        nombre=data['nombre'],
+        personas=data['personas'],
+        fecha=ahora.strftime("%d/%m/%Y"),
+        hora=ahora.strftime("%H:%M"),
+        comentarios="Walk-in"
+    )
 
 @app.get("/health")
 def health():
