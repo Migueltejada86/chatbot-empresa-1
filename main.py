@@ -628,7 +628,7 @@ def reservas_page():
 @app.get("/pedidos-page")
 def pedidos_page():
     return FileResponse("static/pedidos.html")
-
+#!
 @app.post("/reserva-walk-in")
 def reserva_walk_in(data: dict):
     # data = {nombre, personas, mesa}
@@ -806,17 +806,6 @@ def reporte_dia(fecha: str = None):
 
 
 
-@app.post("/reserva-walk-in")
-async def reserva_walk_in(request: Request):
-    data = await request.json()
-    ahora = datetime.now()
-    return crear_reserva(
-        nombre=data['nombre'],
-        personas=data['personas'],
-        fecha=ahora.strftime("%d/%m/%Y"),
-        hora=ahora.strftime("%H:%M"),
-        comentarios="Walk-in"
-    )
 
 @app.get("/health")
 def health():
