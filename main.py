@@ -767,7 +767,6 @@ def ver_pedidos():
 def cambiar_estado_pedido(pedido_id: int, estado: str = Form(...)):
     return actualizar_estado_pedido(pedido_id, estado)
 
-
 @app.post("/pedidos/{pedido_id}/enviar")
 def marcar_enviado(pedido_id: int):
     conn = get_db()
@@ -919,8 +918,6 @@ def panel_admin():
     </body></html>
     """
     return HTMLResponse(content=html)
-
-
 
 # ========================================
 # === ENDPOINTS - REPORTES
