@@ -509,25 +509,6 @@ async def chat(data: ChatInput):
     respuesta = procesar_mensaje(data.user_id, data.mensaje)
     return {"respuesta": respuesta}
 
-@app.post("/webhook")  #1
-async def whatsapp_webhook(
-    From: str = Form(...), Body: str = Form(...),
-    MediaUrl0: str = Form(None), MediaContentType0: str = Form(None)
-):
-    try:
-        if MediaUrl0 and "pdf" in str(MediaContentType0):
-            resp = MessagingResponse()
-            resp.message("Recibimos tu comprobante. Ya lo cargamos, va en camino a tu domicilio 🛵")
-            return Response(content=str(resp), media_type="application/xml")
-        respuesta = procesar_mensaje(user_id=From, mensaje=Body, telefono=From)
-        resp = MessagingResponse()
-        resp.message(respuesta)
-        return Response(content=str(resp), media_type="application/xml")
-    except Exception as e:
-        print(f"[ERROR WHATSAPP] {str(e)}")
-        resp = MessagingResponse()
-        resp.message("Error. Intentá de nuevo.")
-        return Response(content=str(resp), media_type="application/xml")
 
 # ========================================
 # === ENDPOINTS - RESERVAS
