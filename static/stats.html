@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Estadísticas - El Descansito</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, Arial; background: #f5f5f5; padding: 20px; }
+       .header { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        h1 { color: #e67e22; margin-bottom: 15px; }
+       .nav a { color: #3498db; text-decoration: none; margin-right: 15px; }
+       .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+       .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+       .card h3 { color: #2c3e50; margin-bottom: 15px; border-bottom: 2px solid #e67e22; padding-bottom: 10px; }
+       .stat { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #ecf0f1; }
+       .stat:last-child { border-bottom: none; }
+       .stat.label { color: #7f8c8d; }
+       .stat.value { font-weight: bold; font-size: 18px; color: #2c3e50; }
+       .big { font-size: 32px; color: #e67e22; }
+       .filters { margin-bottom: 20px; }
+        input, button { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px; }
+        button { background: #e67e22; color: white; border: none; cursor: pointer; }
+        table { width: 100%; margin-top: 10px; }
+        td { padding: 8px 4px; border-bottom: 1px solid #ecf0f1; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📊 Estadísticas - El Descansito</h1>
+        <div class="nav">
+            <a href="/panel">← Panel</a>
+            <a href="/reservas-page">Reservas</a>
+            <a href="/pedidos-page">Pedidos</a>
+        </div>
+        <div class="filters">
+            <input type="date" id="desde">
+            <input type="date" id="hasta">
+            <button onclick="cargar()">Filtrar</button>
+            <button onclick="ultimos30()">Últimos 30 días</button>
+        </div>
+    </div>
+
+    <div class="grid" id="grid">
+        <div class="card"><p>Cargando...</p></div>
+    </div>
+
+<script>
+async function cargar() {
+    const desde = document.getElementById('desde').value;
+    const hasta = document.getElementById('hasta').value;
+    const params = new URLSearchParams();
+    if (desde) params.append('fecha_desde', desde);
+    if (hasta) params.append('fecha_hasta', hasta);
+    
+    const res = await fetch(`/stats?${params}`);
+    const data = await res.json();
+    
+    document.getElementById('grid').innerHTML = `
+        <div class="card">
+            <h3>📅 Reservas</h3>
+            <div class="stat"><span class="label">Total</span><span class="value big">${data.reservas.total}</span></div>
+            <div class="stat"><span class="label">Personas</span><span class="value">${data.reservas.total_personas || 0}</span></div>
+            <div class="stat"><span class="label">Confirmadas</span><span class="value" style="color:#27ae60">${data.reservas.confirmadas}</span></div>
+            <div class="stat"><span class="label">Canceladas</span><span class="value" style="color:#e74c3c">${data.reservas.canceladas}</span></div>
+            <div class="stat"><span class="label">Test/Stress</span><span class="value" style="color:#95a5a6">${data.reservas.test}</span></div>
+        </div>
+        
+        <div class="card">
+            <h3>🛵 Pedidos</h3>
+            <div class="stat"><span class="label">Total</span><span class="value big">${data.pedidos.total}</span></div>
+            <div class="stat"><span class="label">Facturado</span><span class="value" style="color:#27ae60">$${data.pedidos.facturado || 0}</span></div>
+            <div class="stat"><span class="label">Delivery</span><span class="value">${data.pedidos.deliveries}</span></div>
+            <div class="stat"><span class="label">Takeaway</span><span class="value">${data.pedidos.takeaway}</span></div>
+            <div class="stat"><span class="label">Pendientes</span><span class="value" style="color:#f39c12">${data.pedidos.pendientes}</span></div>
+            <div class="stat"><span class="label">Test/Stress</span><span class="value" style="color:#95a5a6">${data.pedidos.test}</span></div>
+        </div>
+        
+        <div class="card">
+            <h3>🔥 Top Días</h3>
+            <table>
+                ${data.top_dias.map(d => `<tr><td>${d.dia}</td><td><strong>${d.cant}</strong> reservas</td><td>${d.personas} pers.</td></tr>`).join('')}
+            </table>
+        </div>
+        
+        <div class="card">
+            <h3>⏰ Horarios Populares</h3>
+            <table>
+                ${data.top_horas.map(h => `<tr><td>${h.hora}</td><td><strong>${h.cant}</strong> reservas</td></tr>`).join('')}
+            </table>
+        </div>
+    `;
+}
+
+function ultimos30() {
+    const hoy = new Date().toISOString().split('T')[0];
+    const hace30 = new Date(Date.now() - 30*24*60*60*1000).toISOString().split('T')[0];
+    document.getElementById('desde').value = hace30;
+    document.getElementById('hasta').value = hoy;
+    cargar();
+}
+
+ultimos30();
+</script>
+</body>
+</html>

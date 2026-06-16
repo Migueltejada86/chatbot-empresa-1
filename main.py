@@ -876,18 +876,80 @@ def health():
     return {"status": "ok", "db": "postgres", "whatsapp": "enabled" if twilio_client else "disabled"}
 
 @app.get("/stats")
-def get_stats():
+def estadisticas(fecha_desde: str = None, fecha_hasta: str = None):
     conn = get_db()
     c = conn.cursor()
+    
+    # Default: últimos 30 días
+    if not fecha_desde:
+        fecha_desde = (datetime.now().date() - timedelta(days=30)).isoformat()
+    if not fecha_hasta:
+        fecha_hasta = datetime.now().date().isoformat()
+    
+    # Reservas
     c.execute("""
         SELECT 
-            (SELECT COUNT(*) FROM reservas WHERE estado='confirmada') as reservas_total,
-            (SELECT COUNT(*) FROM pedidos WHERE tipo='delivery') as delivery_total,
-            (SELECT COALESCE(SUM(total),0) FROM pedidos) as facturado_total
-    """)
-    data = c.fetchone()
+            COUNT(*) as total,
+            SUM(personas) as total_personas,
+            COUNT(CASE WHEN estado='confirmada' THEN 1 END) as confirmadas,
+            COUNT(CASE WHEN estado='cancelada' THEN 1 END) as canceladas,
+            COUNT(CASE WHEN comentarios ILIKE '%stress%' THEN 1 END) as test
+        FROM reservas 
+        WHERE fecha BETWEEN %s AND %s
+    """, (fecha_desde, fecha_hasta))
+    res = c.fetchone()
+    
+    # Pedidos
+    c.execute("""
+        SELECT 
+            COUNT(*) as total,
+            SUM(total) as facturado,
+            COUNT(CASE WHEN tipo='delivery' THEN 1 END) as deliveries,
+            COUNT(CASE WHEN tipo='takeaway' THEN 1 END) as takeaway,
+            COUNT(CASE WHEN estado='pendiente' THEN 1 END) as pendientes,
+            COUNT(CASE WHEN estado='en_camino' THEN 1 END) as en_camino,
+            COUNT(CASE WHEN estado='entregado' THEN 1 END) as entregados,
+            COUNT(CASE WHEN comentarios ILIKE '%stress%' THEN 1 END) as test
+        FROM pedidos 
+        WHERE creado::date BETWEEN %s AND %s
+    """, (fecha_desde, fecha_hasta))
+    ped = c.fetchone()
+    
+    # Top días con más reservas
+    c.execute("""
+        SELECT to_char(fecha, 'DD/MM') as dia, COUNT(*) as cant, SUM(personas) as personas
+        FROM reservas 
+        WHERE fecha BETWEEN %s AND %s AND estado='confirmada'
+        GROUP BY fecha 
+        ORDER BY cant DESC 
+        LIMIT 5
+    """, (fecha_desde, fecha_hasta))
+    top_dias = c.fetchall()
+    
+    # Horarios más pedidos
+    c.execute("""
+        SELECT to_char(hora, 'HH24:MI') as hora, COUNT(*) as cant
+        FROM reservas 
+        WHERE fecha BETWEEN %s AND %s AND estado='confirmada'
+        GROUP BY hora 
+        ORDER BY cant DESC 
+        LIMIT 5
+    """, (fecha_desde, fecha_hasta))
+    top_horas = c.fetchall()
+    
     conn.close()
-    return dict(data)
+    return {
+        "rango": {"desde": fecha_desde, "hasta": fecha_hasta},
+        "reservas": dict(res),
+        "pedidos": dict(ped),
+        "top_dias": top_dias,
+        "top_horas": top_horas
+    }
+
+@app.get("/stats-page", response_class=HTMLResponse)
+def stats_page():
+    with open("static/stats.html") as f:
+        return f.read()
 
 @app.get("/")
 def root():
