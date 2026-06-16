@@ -501,14 +501,6 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(enviar_recordatorios, 'interval', minutes=5)
 scheduler.start()
 
-# ========================================
-# === ENDPOINTS - CHAT & WEBHOOK
-# ========================================
-@app.post("/chat")
-async def chat(data: ChatInput):
-    respuesta = procesar_mensaje(data.user_id, data.mensaje)
-    return {"respuesta": respuesta}
-
 
 # ========================================
 # === ENDPOINTS - RESERVAS
@@ -530,20 +522,7 @@ def ver_reservas():
     conn.close()
     return {"total": len(rows), "reservas": rows}
 
-@app.post("/cancelar-reserva/{reserva_id}")
-def cancelar_reserva_endpoint(reserva_id: int):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("UPDATE reservas SET estado='cancelada' WHERE id=%s AND estado='confirmada'", (reserva_id,))
-        if c.rowcount == 0:
-            conn.close()
-            return {"error": "Reserva no encontrada o ya cancelada"}
-        conn.commit()
-        conn.close()
-        return {"ok": True, "mensaje": f"Reserva #{reserva_id} cancelada"}
-    except Exception as e:
-        return {"error": str(e)}
+
 
 @app.get("/reserva/{reserva_id}")
 def get_reserva(reserva_id: int):
@@ -661,32 +640,7 @@ async def whatsapp_webhook(
 # ========================================
 # === ENDPOINTS - RESERVAS API
 # ========================================
-@app.get("/reservas")
-def ver_reservas():
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("""
-        SELECT id, nombre, personas, 
-               to_char(fecha, 'DD/MM/YYYY') as fecha, 
-               to_char(hora, 'HH24:MI') as hora, 
-               estado, telefono, comentarios, 
-               to_char(creado, 'DD/MM/YYYY HH24:MI') as creado 
-        FROM reservas 
-        ORDER BY fecha DESC, hora DESC
-    """)
-    rows = c.fetchall()
-    conn.close()
-    return {"total": len(rows), "reservas": rows}
 
-@app.get("/reserva/{reserva_id}")
-def get_reserva(reserva_id: int):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT * FROM reservas WHERE id=%s", (reserva_id,))
-    r = c.fetchone()
-    conn.close()
-    if not r: return {"error": "No encontrada"}
-    return dict(r)
 
 @app.post("/cancelar-reserva/{reserva_id}")
 def cancelar_reserva_endpoint(reserva_id: int):
@@ -703,91 +657,6 @@ def cancelar_reserva_endpoint(reserva_id: int):
     except Exception as e:
         return {"error": str(e)}
 
-@app.put("/editar-reserva/{reserva_id}")
-def editar_reserva(reserva_id: int, data: dict):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        if any(k in data for k in ['fecha', 'hora', 'personas']):
-            c.execute("SELECT personas FROM reservas WHERE id=%s", (reserva_id,))
-            personas_viejas = c.fetchone()['personas']
-            fecha = data.get('fecha')
-            hora = data.get('hora')
-            personas = data.get('personas', personas_viejas)
-            disp = ver_mesas_disponibles(fecha, hora)
-            if disp["personas_libres"] + personas_viejas < personas:
-                return {"error": f"Solo quedan {disp['personas_libres'] + personas_viejas} lugares"}
-        set_clause = ", ".join([f"{k}=%s" for k in data.keys()])
-        values = list(data.values()) + [reserva_id]
-        c.execute(f"UPDATE reservas SET {set_clause} WHERE id=%s", values)
-        conn.commit()
-        conn.close()
-        return {"ok": True}
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.post("/reserva-walk-in")
-async def reserva_walk_in(request: Request):
-    data = await request.json()
-    ahora = datetime.now()
-    return crear_reserva(
-        nombre=data['nombre'],
-        personas=data['personas'],
-        fecha=ahora.strftime("%d/%m/%Y"),
-        hora=ahora.strftime("%H:%M"),
-        comentarios="Walk-in"
-    )
-
-# ========================================
-# === ENDPOINTS - PEDIDOS API
-# ========================================
-@app.get("/pedidos")
-def ver_pedidos():
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT id, tipo, nombre, telefono, direccion, items, total, estado, comentarios, pago_tipo, creado FROM pedidos ORDER BY creado DESC")
-    rows = c.fetchall()
-    conn.close()
-    return {"total": len(rows), "pedidos": rows}
-
-@app.post("/pedidos/{pedido_id}/estado")
-def cambiar_estado_pedido(pedido_id: int, estado: str = Form(...)):
-    return actualizar_estado_pedido(pedido_id, estado)
-
-@app.post("/pedidos/{pedido_id}/enviar")
-def marcar_enviado(pedido_id: int):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("""
-        UPDATE pedidos SET estado='en_camino' 
-        WHERE id=%s AND estado='pendiente' 
-        RETURNING telefono, nombre, total, direccion, tipo
-    """, (pedido_id,))
-    row = c.fetchone()
-    conn.commit()
-    conn.close()
-    
-    if not row:
-        return {"error": "Pedido no encontrado o ya fue enviado"}
-    
-    print(f"[ENVIAR] Twilio activo: {bool(twilio_client)}")
-    print(f"[ENVIAR] Pedido: {pedido_id} Tipo: {row['tipo']} Tel: {row['telefono']}")
-    
-    if row['tipo'] == 'delivery' and twilio_client and row['telefono']:
-        telefono = row['telefono']
-        if not telefono.startswith('whatsapp:'):
-            telefono = f"whatsapp:{telefono}"
-        msg = f"🛵 {row['nombre']}, tu pedido #{pedido_id} salió para {row['direccion']}. Total: ${row['total']}. Llega en 20-30 min aprox."
-        print(f"[ENVIAR] Enviando a: {telefono}")
-        try:
-            twilio_client.messages.create(body=msg, from_=TWILIO_WHATSAPP_NUMBER, to=telefono)
-            print(f"[ENVIAR] OK - WhatsApp enviado")
-            return {"ok": True, "detalle": f"Cliente {row['nombre']} notificado"}
-        except Exception as e:
-            print(f"[TWILIO ERROR] {str(e)}")
-            return {"error": f"Pedido marcado pero WhatsApp falló: {str(e)}"}
-    
-    return {"ok": True, "detalle": "Pedido marcado como enviado"}
 
 # ========================================
 # === ENDPOINTS - PÁGINAS HTML
@@ -1005,9 +874,10 @@ def stress_reservas():
     for dia in range(7):
         for turno in ['20:00', '20:30', '21:00', '21:30']:
             for mesa in range(1, 11):
-                c.execute("""INSERT INTO reservas (nombre,telefono,fecha,hora,personas,estado,comentarios) 
-                             VALUES (%s,%s,%s)""",
-                          (f'Test {mesa}', f'5493547{dia*40+mesa:06d}', fecha + timedelta(days=dia), turno, 2, 'confirmada', 'stress'))
+                c.execute("""INSERT INTO reservas (nombre, telefono, fecha, hora, personas, estado, comentarios) 
+                             VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                          (f'Test {mesa}', f'5493547{dia*40+mesa:06d}', fecha + timedelta(days=dia), 
+                           turno, 2, 'confirmada', 'stress'))
                 count += 1
     conn.commit()
     conn.close()
@@ -1019,8 +889,8 @@ def stress_pedidos(cant: int):
     conn = get_db()
     c = conn.cursor()
     for i in range(cant):
-        c.execute("""INSERT INTO pedidos (tipo,nombre,telefono,direccion,items,total,estado,comentarios,pago_tipo) 
-                     VALUES (%s,%s,%s)""",
+        c.execute("""INSERT INTO pedidos (tipo, nombre, telefono, direccion, items, total, estado, comentarios, pago_tipo) 
+                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                   ('delivery', f'Cliente {i}', f'5493546{i:06d}', f'Calle {i}', 
                    json.dumps([{"nombre":"Pizza","precio":8000,"cantidad":1}]), 8500, 'pendiente', 'stress', 'efectivo'))
     conn.commit()
