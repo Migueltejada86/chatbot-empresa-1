@@ -767,6 +767,7 @@ def ver_pedidos():
 def cambiar_estado_pedido(pedido_id: int, estado: str = Form(...)):
     return actualizar_estado_pedido(pedido_id, estado)
 
+
 @app.post("/pedidos/{pedido_id}/enviar")
 def marcar_enviado(pedido_id: int):
     conn = get_db()
@@ -783,15 +784,21 @@ def marcar_enviado(pedido_id: int):
     if not row:
         return {"error": "Pedido no encontrado o ya fue enviado"}
     
+    print(f"[ENVIAR] Twilio activo: {bool(twilio_client)}")
+    print(f"[ENVIAR] Pedido: {pedido_id} Tipo: {row['tipo']} Tel: {row['telefono']}")
+    
     if row['tipo'] == 'delivery' and twilio_client and row['telefono']:
         telefono = row['telefono']
         if not telefono.startswith('whatsapp:'):
             telefono = f"whatsapp:{telefono}"
         msg = f"🛵 {row['nombre']}, tu pedido #{pedido_id} salió para {row['direccion']}. Total: ${row['total']}. Llega en 20-30 min aprox."
+        print(f"[ENVIAR] Enviando a: {telefono}")
         try:
             twilio_client.messages.create(body=msg, from_=TWILIO_WHATSAPP_NUMBER, to=telefono)
+            print(f"[ENVIAR] OK - WhatsApp enviado")
             return {"ok": True, "detalle": f"Cliente {row['nombre']} notificado"}
         except Exception as e:
+            print(f"[TWILIO ERROR] {str(e)}")
             return {"error": f"Pedido marcado pero WhatsApp falló: {str(e)}"}
     
     return {"ok": True, "detalle": "Pedido marcado como enviado"}
@@ -912,6 +919,8 @@ def panel_admin():
     </body></html>
     """
     return HTMLResponse(content=html)
+
+
 
 # ========================================
 # === ENDPOINTS - REPORTES
