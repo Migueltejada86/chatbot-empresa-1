@@ -3,107 +3,150 @@
 <head>
     <title>Reservas - El Descansito</title>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body{font-family:Arial;padding:20px;background:#f5f5f5}
-        h1{color:#e67e22}
-        table{width:100%;background:white;border-collapse:collapse;margin-top:20px}
-        th,td{padding:12px;border:1px solid #ddd;text-align:left}
-        th{background:#e67e22;color:white}
-        .btn{border:none;padding:5px 10px;border-radius:4px;cursor:pointer;margin-right:5px;color:white}
-        .btn-editar{background:#3498db}
-        .btn-cancelar{background:#e74c3c}
-        .btn:hover{opacity:0.8}
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, Arial; background: #f5f5f5; padding: 20px; }
+        .header { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #e67e22; margin-bottom: 15px; }
+        .nav a { color: #3498db; text-decoration: none; margin-right: 15px; }
+        .filters { display: flex; gap: 10px; margin: 15px 0; flex-wrap: wrap; }
+        input, select, button { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+        button { background: #e67e22; color: white; border: none; cursor: pointer; }
+        button:hover { background: #d35400; }
+        button.danger { background: #e74c3c; }
+        button.danger:hover { background: #c0392b; }
+        .table-wrap { background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ecf0f1; font-size: 14px; }
+        th { background: #e67e22; color: white; position: sticky; top: 0; }
+        tr:hover { background: #fef5e7; }
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+        .confirmada { background: #d5f4e6; color: #27ae60; }
+        .cancelada { background: #fadbd8; color: #e74c3c; }
+        .pagination { display: flex; gap: 10px; justify-content: center; padding: 20px; align-items: center; }
+        .pagination button:disabled { background: #bdc3c7; cursor: not-allowed; }
+        .loading { text-align: center; padding: 40px; color: #7f8c8d; }
     </style>
 </head>
 <body>
-    <h1>📅 Reservas</h1>
-    <div id="stats"></div>
-    <table id="tabla">
-        <thead>
-            <tr>
-                <th>ID</th><th>Nombre</th><th>Personas</th><th>Fecha</th>
-                <th>Hora</th><th>Teléfono</th><th>Estado</th><th>Comentarios</th><th>Acciones</th>
-            </tr>
-        </thead>
-        <tbody></tbody>
-    </table>
+    <div class="header">
+        <h1>📅 Reservas - El Descansito</h1>
+        <div class="nav">
+            <a href="/panel">← Panel</a>
+            <a href="/pedidos-page">Ver Pedidos</a>
+        </div>
+        <div class="filters">
+            <input type="text" id="fecha" placeholder="DD/MM/YYYY" maxlength="10">
+            <select id="estado">
+                <option value="">Todos los estados</option>
+                <option value="confirmada">Confirmadas</option>
+                <option value="cancelada">Canceladas</option>
+            </select>
+            <button onclick="cargar(1)">Filtrar</button>
+            <button onclick="limpiar()">Limpiar</button>
+        </div>
+    </div>
+
+    <div class="table-wrap">
+        <div id="loading" class="loading">Cargando reservas...</div>
+        <table id="tabla" style="display:none">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Fecha</th>
+                    <th>Hora</th>
+                    <th>Nombre</th>
+                    <th>Pers.</th>
+                    <th>Teléfono</th>
+                    <th>Estado</th>
+                    <th>Comentarios</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+        </table>
+        <div class="pagination">
+            <button id="prev" onclick="cambiarPagina(-1)">← Anterior</button>
+            <span id="info"></span>
+            <button id="next" onclick="cambiarPagina(1)">Siguiente →</button>
+        </div>
+    </div>
 
 <script>
-function cancelar(id) {
-    if (!confirm(`¿Cancelar reserva #${id}?`)) return;
-    fetch(`/cancelar-reserva/${id}`, {method: 'POST'})
-      .then(r => r.json())
-      .then(d => {
-          if(d.ok) {
-              alert('Reserva cancelada');
-              location.reload();
-          } else {
-              alert('Error: ' + d.error);
-          }
-      });
-}
+let currentPage = 1;
+let totalPages = 1;
 
-function editar(id) {
-    fetch(`/reserva/${id}`).then(r=>r.json()).then(res => {
-        if(res.error) return alert(res.error);
-        const nombre = prompt("Nombre:", res.nombre);
-        if(!nombre) return;
-        const personas = prompt("Personas:", res.personas);
-        const fecha = prompt("Fecha DD/MM/YYYY:", res.fecha || '');
-        const hora = prompt("Hora HH:MM:", res.hora || '');
+async function cargar(page = 1) {
+    currentPage = page;
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('tabla').style.display = 'none';
+    
+    const fecha = document.getElementById('fecha').value;
+    const estado = document.getElementById('estado').value;
+    const params = new URLSearchParams({page});
+    if (fecha) params.append('fecha', fecha);
+    if (estado) params.append('estado', estado);
+    
+    try {
+        const res = await fetch(`/reservas?${params}`);
+        const data = await res.json();
         
-        fetch(`/editar-reserva/${id}`, {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                nombre, 
-                personas: parseInt(personas), 
-                fecha, 
-                hora
-            })
-        }).then(r=>r.json()).then(d => {
-            if(d.ok) {
-                alert('Reserva actualizada');
-                location.reload();
-            } else {
-                alert('Error: ' + d.error);
-            }
-        });
-    });
+        const tbody = document.getElementById('tbody');
+        tbody.innerHTML = data.reservas.map(r => `
+            <tr>
+                <td>${r.id}</td>
+                <td>${r.fecha}</td>
+                <td>${r.hora}</td>
+                <td>${r.nombre}</td>
+                <td>${r.personas}</td>
+                <td>${r.telefono || '-'}</td>
+                <td><span class="badge ${r.estado}">${r.estado}</span></td>
+                <td>${r.comentarios || '-'}</td>
+                <td>
+                    ${r.estado === 'confirmada' ? 
+                        `<button class="danger" onclick="cancelar(${r.id})">Cancelar</button>` : 
+                        '-'}
+                </td>
+            </tr>
+        `).join('');
+        
+        totalPages = Math.ceil(data.total / data.limit);
+        document.getElementById('info').textContent = `Página ${page} de ${totalPages} - Total: ${data.total}`;
+        document.getElementById('prev').disabled = page === 1;
+        document.getElementById('next').disabled = page === totalPages;
+        
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('tabla').style.display = 'table';
+    } catch (e) {
+        alert('Error cargando reservas: ' + e);
+    }
 }
 
-fetch('/reservas')
-  .then(r => {
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.json();
-  })
-  .then(d => {
-    document.getElementById('stats').innerHTML = `<h3>Total: ${d.total}</h3>`;
-    const tbody = document.querySelector('#tabla tbody');
-    tbody.innerHTML = d.reservas.map(r=>`
-        <tr>
-            <td>#${r.id}</td>
-            <td>${r.nombre}</td>
-            <td>${r.personas}</td>
-            <td>${r.fecha}</td>
-            <td>${r.hora}</td>
-            <td>${r.telefono || '-'}</td>
-            <td>${r.estado}</td>
-            <td>${r.comentarios || '-'}</td>
-            <td>
-                ${r.estado === 'confirmada' ? 
-                  `<button class="btn btn-editar" onclick="editar(${r.id})">Editar</button>
-                   <button class="btn btn-cancelar" onclick="cancelar(${r.id})">Cancelar</button>` 
-                  : '-'}
-            </td>
-        </tr>
-    `).join('');
-  })
-  .catch(err => {
-    console.error('Error:', err);
-    document.querySelector('#tabla tbody').innerHTML = 
-      `<tr><td colspan="9">Error: ${err.message}</td></tr>`;
-  });
+function cambiarPagina(delta) {
+    const nueva = currentPage + delta;
+    if (nueva >= 1 && nueva <= totalPages) cargar(nueva);
+}
+
+function limpiar() {
+    document.getElementById('fecha').value = '';
+    document.getElementById('estado').value = '';
+    cargar(1);
+}
+
+async function cancelar(id) {
+    if (!confirm(`¿Cancelar reserva #${id}?`)) return;
+    const res = await fetch(`/cancelar-reserva/${id}`, {method: 'POST'});
+    const data = await res.json();
+    if (data.ok) {
+        alert('Reserva cancelada');
+        cargar(currentPage);
+    } else {
+        alert('Error: ' + data.error);
+    }
+}
+
+cargar(1);
 </script>
 </body>
 </html>

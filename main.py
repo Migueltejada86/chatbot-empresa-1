@@ -506,22 +506,38 @@ scheduler.start()
 # === ENDPOINTS - RESERVAS
 # ========================================
 @app.get("/reservas")
-def ver_reservas():
+def ver_reservas(page: int = 1, fecha: str = None, estado: str = None):
+    limit = 50
+    offset = (page - 1) * limit
     conn = get_db()
     c = conn.cursor()
-    c.execute("""
-        SELECT id, nombre, personas, 
-               to_char(fecha, 'DD/MM/YYYY') as fecha, 
-               to_char(hora, 'HH24:MI') as hora, 
-               estado, telefono, comentarios, 
+    
+    query = """SELECT id, nombre, personas, to_char(fecha, 'DD/MM/YYYY') as fecha, 
+               to_char(hora, 'HH24:MI') as hora, estado, telefono, comentarios,
                to_char(creado, 'DD/MM/YYYY HH24:MI') as creado 
-        FROM reservas 
-        ORDER BY fecha DESC, hora DESC
-    """)
+               FROM reservas WHERE 1=1"""
+    params = []
+    
+    if fecha:
+        query += " AND fecha = %s"
+        params.append(datetime.strptime(fecha, "%d/%m/%Y").date())
+    if estado:
+        query += " AND estado = %s"
+        params.append(estado)
+        
+    query += " ORDER BY fecha DESC, hora DESC LIMIT %s OFFSET %s"
+    params.extend([limit, offset])
+    
+    c.execute(query, tuple(params))
     rows = c.fetchall()
+    
+    c.execute("SELECT COUNT(*) as total FROM reservas WHERE 1=1" + 
+              (" AND fecha = %s" if fecha else "") + 
+              (" AND estado = %s" if estado else ""),
+              tuple([p for p in [datetime.strptime(fecha, "%d/%m/%Y").date() if fecha else None, estado] if p]))
+    total = c.fetchone()['total']
     conn.close()
-    return {"total": len(rows), "reservas": rows}
-
+    return {"total": total, "page": page, "limit": limit, "reservas": rows}
 
 
 @app.get("/reserva/{reserva_id}")
@@ -573,13 +589,43 @@ async def reserva_walk_in(request: Request):
 # === ENDPOINTS - PEDIDOS
 # ========================================
 @app.get("/pedidos")
-def ver_pedidos():
+def ver_pedidos(page: int = 1, tipo: str = None, estado: str = None):
+    limit = 50
+    offset = (page - 1) * limit
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT id, tipo, nombre, telefono, direccion, items, total, estado, comentarios, pago_tipo, creado FROM pedidos ORDER BY creado DESC")
+    
+    query = """SELECT id, tipo, nombre, telefono, direccion, items, total, estado, 
+               comentarios, pago_tipo, to_char(creado, 'DD/MM HH24:MI') as creado 
+               FROM pedidos WHERE 1=1"""
+    params = []
+    
+    if tipo:
+        query += " AND tipo = %s"
+        params.append(tipo)
+    if estado:
+        query += " AND estado = %s"
+        params.append(estado)
+        
+    query += " ORDER BY creado DESC LIMIT %s OFFSET %s"
+    params.extend([limit, offset])
+    
+    c.execute(query, tuple(params))
     rows = c.fetchall()
+    
+    count_query = "SELECT COUNT(*) as total FROM pedidos WHERE 1=1"
+    count_params = []
+    if tipo:
+        count_query += " AND tipo = %s"
+        count_params.append(tipo)
+    if estado:
+        count_query += " AND estado = %s"
+        count_params.append(estado)
+        
+    c.execute(count_query, tuple(count_params))
+    total = c.fetchone()['total']
     conn.close()
-    return {"total": len(rows), "pedidos": rows}
+    return {"total": total, "page": page, "limit": limit, "pedidos": rows}
 
 @app.post("/pedidos/{pedido_id}/estado")
 def cambiar_estado_pedido(pedido_id: int, estado: str = Form(...)):
