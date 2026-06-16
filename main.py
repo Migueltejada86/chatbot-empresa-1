@@ -727,103 +727,10 @@ def pedidos_page():
 
 
 # === PANEL ADMIN - FIX JS ===
-@app.get("/panel")
-def panel_admin():
-    conn = get_db()
-    c = conn.cursor()
-    hoy = datetime.now().date()
-    mes_actual = hoy.month
-    anio_actual = hoy.year
-    
-    c.execute("SELECT COUNT(*) as total FROM reservas WHERE fecha=%s AND estado='confirmada'", (hoy,))
-    reservas_hoy = c.fetchone()['total']
-    
-    c.execute("SELECT COUNT(*) as total FROM reservas WHERE EXTRACT(MONTH FROM fecha)=%s AND EXTRACT(YEAR FROM fecha)=%s AND estado='confirmada'", (mes_actual, anio_actual))
-    reservas_mes = c.fetchone()['total']
-    
-    c.execute("SELECT COUNT(*) as total FROM reservas WHERE estado='confirmada'")
-    reservas_total = c.fetchone()['total']
-    
-    c.execute("SELECT COUNT(*) as count, COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='delivery' AND DATE(creado)=%s", (hoy,))
-    del_hoy = c.fetchone()
-    
-    c.execute("SELECT COUNT(*) as count, COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='delivery' AND EXTRACT(MONTH FROM creado)=%s AND EXTRACT(YEAR FROM creado)=%s", (mes_actual, anio_actual))
-    del_mes = c.fetchone()
-    
-    c.execute("SELECT COUNT(*) as count, COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='takeaway' AND DATE(creado)=%s", (hoy,))
-    ta_hoy = c.fetchone()
-    
-    c.execute("SELECT COUNT(*) as count, COALESCE(SUM(total),0) as sum FROM pedidos WHERE tipo='takeaway' AND EXTRACT(MONTH FROM creado)=%s AND EXTRACT(YEAR FROM creado)=%s", (mes_actual, anio_actual))
-    ta_mes = c.fetchone()
-    
-    c.execute("""
-        SELECT nombre, personas, to_char(fecha, 'DD/MM') as fecha, to_char(hora, 'HH24:MI') as hora 
-        FROM reservas 
-        WHERE fecha >= %s AND estado='confirmada'
-        ORDER BY fecha, hora LIMIT 5
-    """, (hoy,))
-    proximas = c.fetchall()
-    conn.close()
-    
-    proximas_html = "".join([f"<tr><td>{r['fecha']}</td><td>{r['hora']}</td><td>{r['nombre']}</td><td>{r['personas']}p</td></tr>" for r in proximas])
-    
-    html = f"""
-    <html><head><title>Panel El Descansito</title><meta charset="UTF-8">
-    <style>
-    body{{font-family:Arial;background:#f5f5f5;padding:20px;margin:0}}
-    .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:15px;margin-bottom:20px}}
-    .card{{background:white;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1)}}
-    h1{{color:#e67e22;margin-bottom:20px}}.stat{{font-size:32px;font-weight:bold;color:#27ae60;margin:10px 0}}
-    .substat{{font-size:14px;color:#7f8c8d}}.label{{font-size:12px;color:#95a5a6;text-transform:uppercase}}
-    table{{width:100%;border-collapse:collapse}}th,td{{padding:8px;text-align:left;border-bottom:1px solid #ecf0f1}}
-    th{{background:#e67e22;color:white}}a{{color:#3498db;text-decoration:none;margin-right:15px}}
-    .nav{{background:white;padding:15px;border-radius:8px;margin-bottom:20px}}
-    </style></head><body>
-    <h1>🍽 El Descansito - Panel</h1>
-    <div class="nav">
-        <a href="/reservas-page">Ver Reservas</a>
-        <a href="/pedidos-page">Ver Pedidos</a>
-        <a href="/chats">Ver Chats</a>
-        <button onclick="walkIn()" style="background:#27ae60;color:white;border:none;padding:8px 15px;border-radius:4px;cursor:pointer;float:right">+ Walk-In</button>
-    </div>
-    <div class="grid">
-        <div class="card"><div class="label">Reservas Hoy</div><div class="stat">{reservas_hoy}</div></div>
-        <div class="card"><div class="label">Reservas Mes</div><div class="stat">{reservas_mes}</div></div>
-        <div class="card"><div class="label">Delivery Hoy</div><div class="stat">{del_hoy['count']}</div><div class="substat">${del_hoy['sum']}</div></div>
-        <div class="card"><div class="label">Takeaway Hoy</div><div class="stat">{ta_hoy['count']}</div><div class="substat">${ta_hoy['sum']}</div></div>
-    </div>
-    <div class="card">
-        <h3>Próximas Reservas</h3>
-        <table>
-            <thead><tr><th>Fecha</th><th>Hora</th><th>Nombre</th><th>Personas</th></tr></thead>
-            <tbody>{proximas_html or '<tr><td colspan="4">Sin reservas próximas</td></tr>'}</tbody>
-        </table>
-    </div>
-    <script>
-    function walkIn() {{
-        const nombre = prompt("Nombre del cliente:");
-        if(!nombre) return;
-        const personas = prompt("Cantidad de personas:");
-        if(!personas || isNaN(personas)) return;
-        fetch('/reserva-walk-in', {{
-            method: 'POST',
-            headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({{nombre: nombre, personas: parseInt(personas)}})
-        }}).then(r=>r.json()).then(data => {{
-            if(data.status === 'confirmada') {{
-                alert(`Walk-in cargado: ${{data.detalle}}`);
-                location.reload();
-            }} else {{
-                alert('Error: ' + data.error);
-            }}
-        }});
-    }}
-    </script>
-    </body></html>
-    """
-    return HTMLResponse(content=html)
-
-
+@app.get("/panel", response_class=HTMLResponse)
+def panel():
+    with open("static/panel.html") as f:
+        return f.read()
 # ========================================
 # === ENDPOINTS - REPORTES
 # ========================================
