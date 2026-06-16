@@ -41,7 +41,7 @@ print(f"Twilio configurado: {bool(twilio_client)}")
 TOTAL_MESAS = 10
 DURACION_MESA_HORAS = 2.5
 COSTO_DELIVERY = 3000
-HORARIO_COCINA = {"inicio": "09:00", "fin": "23:00"}
+HORARIO_COCINA = {"inicio": "01:00", "fin": "23:00"}
 
 # ========================================
 # === SECURITY
