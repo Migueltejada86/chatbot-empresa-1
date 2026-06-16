@@ -994,3 +994,45 @@ def root():
     </div>
     </body></html>
     """)
+
+
+@app.get("/stress/reservas")
+def stress_reservas():
+    conn = get_db()
+    c = conn.cursor()
+    fecha = datetime.now().date() + timedelta(days=1)
+    count = 0
+    for dia in range(7):
+        for turno in ['20:00', '20:30', '21:00', '21:30']:
+            for mesa in range(1, 11):
+                c.execute("""INSERT INTO reservas (nombre,telefono,fecha,hora,personas,estado,comentarios) 
+                             VALUES (%s,%s,%s)""",
+                          (f'Test {mesa}', f'5493547{dia*40+mesa:06d}', fecha + timedelta(days=dia), turno, 2, 'confirmada', 'stress'))
+                count += 1
+    conn.commit()
+    conn.close()
+    return {"ok": f"{count} reservas creadas"}
+
+@app.get("/stress/pedidos/{cant}")
+def stress_pedidos(cant: int):
+    if cant > 200: return {"error": "Max 200"}
+    conn = get_db()
+    c = conn.cursor()
+    for i in range(cant):
+        c.execute("""INSERT INTO pedidos (tipo,nombre,telefono,direccion,items,total,estado,comentarios,pago_tipo) 
+                     VALUES (%s,%s,%s)""",
+                  ('delivery', f'Cliente {i}', f'5493546{i:06d}', f'Calle {i}', 
+                   json.dumps([{"nombre":"Pizza","precio":8000,"cantidad":1}]), 8500, 'pendiente', 'stress', 'efectivo'))
+    conn.commit()
+    conn.close()
+    return {"ok": f"{cant} pedidos creados"}
+
+@app.get("/stress/limpiar")
+def stress_limpiar():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("DELETE FROM reservas WHERE comentarios = 'stress'")
+    c.execute("DELETE FROM pedidos WHERE comentarios = 'stress'")
+    conn.commit()
+    conn.close()
+    return {"ok": "Datos de stress eliminados"}
