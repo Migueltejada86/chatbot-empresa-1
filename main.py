@@ -17,6 +17,34 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from io import BytesIO
 import logging
+
+from fastapi import Depends
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.responses import RedirectResponse
+import secrets
+import hashlib
+
+security = HTTPBasic()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "descansito2024")  # Cambialo en Railway
+SESSION_COOKIE = "admin_session"
+
+def hash_password(pwd: str) -> str:
+    return hashlib.sha256(pwd.encode()).hexdigest()
+
+def verify_admin(request: Request):
+    session = request.cookies.get(SESSION_COOKIE)
+    if session != hash_password(ADMIN_PASSWORD):
+        raise HTTPException(status_code=401, detail="No autorizado")
+    return True
+
+def require_auth(request: Request):
+    try:
+        verify_admin(request)
+    except HTTPException:
+        return RedirectResponse(url="/login", status_code=302)
+
+
+
 # ========================================
 # === CONFIG & SETUP
 # ========================================
@@ -46,6 +74,67 @@ HORARIO_COCINA = {"inicio": "01:00", "fin": "23:00"}
 # ========================================
 # === SECURITY
 # ========================================
+# Endpoint de login
+@app.get("/login", response_class=HTMLResponse)
+def login_page():
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Login - El Descansito</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body { font-family: Arial; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .card { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); width: 90%; max-width: 400px; }
+            h1 { color: #e67e22; text-align: center; margin-bottom: 30px; }
+            input { width: 100%; padding: 15px; margin: 10px 0; border: 2px solid #ecf0f1; border-radius: 8px; font-size: 16px; }
+            input:focus { outline: none; border-color: #e67e22; }
+            button { width: 100%; padding: 15px; background: #e67e22; color: white; border: none; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; }
+            button:hover { background: #d35400; }
+            .error { color: #e74c3c; text-align: center; margin-top: 15px; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>🍽️ El Descansito</h1>
+            <form method="POST" action="/login">
+                <input type="password" name="password" placeholder="Contraseña" required autofocus>
+                <button type="submit">Ingresar</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    """
+
+@app.post("/login")
+async def login(request: Request):
+    form = await request.form()
+    password = form.get("password")
+    
+    if password == ADMIN_PASSWORD:
+        response = RedirectResponse(url="/panel", status_code=302)
+        response.set_cookie(
+            key=SESSION_COOKIE,
+            value=hash_password(ADMIN_PASSWORD),
+            httponly=True,
+            max_age=86400 * 7,  # 7 días
+            samesite="lax"
+        )
+        return response
+    return RedirectResponse(url="/login?error=1", status_code=302)
+
+@app.get("/logout")
+def logout():
+    response = RedirectResponse(url="/login")
+    response.delete_cookie(SESSION_COOKIE)
+    return response
+
+
+
+
+
+#############
 RATE_LIMIT = defaultdict(list)
 def check_rate_limit(telefono: str) -> bool:
     ahora = time.time()
