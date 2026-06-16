@@ -480,7 +480,8 @@ def enviar_recordatorios():
         FROM reservas 
         WHERE estado='confirmada' 
         AND fecha = CURRENT_DATE
-        AND hora BETWEEN NOW() + INTERVAL '1 hour 55 minutes' AND NOW() + INTERVAL '2 hours 5 minutes'
+        AND hora::time BETWEEN (NOW() + INTERVAL '1 hour 55 minutes')::time 
+                           AND (NOW() + INTERVAL '2 hours 5 minutes')::time
         AND recordatorio_enviado = FALSE
         AND telefono IS NOT NULL
     """)
@@ -488,6 +489,7 @@ def enviar_recordatorios():
         msg = f"Hola {r['nombre']} 👋 Te recordamos tu reserva hoy a las {r['hora']} en El Descansito. ¿Confirmás? Respondé SI para confirmar o CANCELAR si no podés venir."
         enviar_whatsapp(r['telefono'], msg)
         c.execute("UPDATE reservas SET recordatorio_enviado=TRUE WHERE id=%s", (r['id'],))
+        print(f"[RECORDATORIO] Enviado a {r['nombre']} reserva #{r['id']}")
     conn.commit()
     conn.close()
 
@@ -823,6 +825,8 @@ def reservas_page():
 def pedidos_page():
     return FileResponse("static/pedidos.html")
 
+
+# === PANEL ADMIN - FIX JS ===
 @app.get("/panel")
 def panel_admin():
     conn = get_db()
@@ -905,12 +909,12 @@ def panel_admin():
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
             body: JSON.stringify({{nombre: nombre, personas: parseInt(personas)}})
-        }}).then(r=>r.json()).then(d => {{
-            if(d.status === 'confirmada') {{
-                alert(`Walk-in cargado: ${d.detalle}`);
+        }}).then(r=>r.json()).then(data => {{
+            if(data.status === 'confirmada') {{
+                alert(`Walk-in cargado: ${{data.detalle}}`);
                 location.reload();
             }} else {{
-                alert('Error: ' + d.error);
+                alert('Error: ' + data.error);
             }}
         }});
     }}
@@ -918,6 +922,7 @@ def panel_admin():
     </body></html>
     """
     return HTMLResponse(content=html)
+
 
 # ========================================
 # === ENDPOINTS - REPORTES
