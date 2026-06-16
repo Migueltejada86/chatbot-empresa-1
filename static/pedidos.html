@@ -103,9 +103,13 @@ async function cargar(page = 1) {
         const res = await fetch(`/pedidos?${params}`);
         const data = await res.json();
         
+
         const tbody = document.getElementById('tbody');
         tbody.innerHTML = data.pedidos.map(p => {
-            const items = JSON.parse(p.items || '[]').map(i => `${i.cantidad}x ${i.nombre}`).join(', ');
+            // Fix: p.items ya es array, no string
+            const items = Array.isArray(p.items) ? 
+                p.items.map(i => `${i.cantidad}x ${i.nombre}`).join(', ') : 
+                'Sin items';
             return `
             <tr>
                 <td>${p.id}</td>
@@ -124,7 +128,7 @@ async function cargar(page = 1) {
                         '-'}
                 </td>
             </tr>
-        `}).join('');
+            `}).join('');
         
         totalPages = Math.ceil(data.total / data.limit);
         document.getElementById('info').textContent = `Página ${page} de ${totalPages} - Total: ${data.total}`;
