@@ -873,7 +873,7 @@ def panel_admin():
     <div class="nav">
         <a href="/reservas-page">Ver Reservas</a>
         <a href="/pedidos-page">Ver Pedidos</a>
-        <a href="/chats-page">Ver Chats</a>
+        <a href="/chats">Ver Chats</a>
         <button onclick="walkIn()" style="background:#27ae60;color:white;border:none;padding:8px 15px;border-radius:4px;cursor:pointer;float:right">+ Walk-In</button>
     </div>
     <div class="grid">
